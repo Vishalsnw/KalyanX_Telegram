@@ -1,14 +1,13 @@
-name: Run Prediction Every 15 Minutes
+name: Satta ML Predictions
 
 on:
   schedule:
-    - cron: "*/15 6-17 * * *"  # Runs every 15 minutes from 11:30 AM to 10:30 PM IST
+    - cron: '*/15 0-18 * * *'  # Every 15 minutes from 12:00 AM to 6:45 PM UTC (IST 5:30 AM – 11:59 PM)
   workflow_dispatch:
 
 jobs:
-  build:
+  run-predict:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repo
         uses: actions/checkout@v3
@@ -16,20 +15,11 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: 3.11
+          python-version: 3.10
 
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
 
-      - name: Run Prediction Script
+      - name: Run predict script
         run: python predict.py
-
-      - name: Commit and Push Changes
-        run: |
-          git config --global user.name 'github-actions'
-          git config --global user.email 'github-actions@github.com'
-          git add *.csv
-          git commit -m "Auto update predictions"
-          git push
-        continue-on-error: true
