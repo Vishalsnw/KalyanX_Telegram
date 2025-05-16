@@ -1,5 +1,8 @@
-requests
-beautifulsoup4
 pandas
 numpy
 scikit-learn
+requests
+bs4
+lxml
+python-telegram-bot==20.8
+schedule
