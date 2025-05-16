@@ -23,7 +23,7 @@ MARKET_URLS = {
     "Main Bazar": "https://dpbossattamatka.com/panel-chart-record/main-bazar.php"
 }
 
-CSV_PATH = "satta_data.csv"
+CSV_PATH = "enhanced_satta_data.csv"
 
 def scrape_market(url):
     try:
