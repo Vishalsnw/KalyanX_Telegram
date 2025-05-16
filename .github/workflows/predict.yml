@@ -1,0 +1,35 @@
+name: Run Prediction Every 15 Minutes
+
+on:
+  schedule:
+    - cron: "*/15 6-17 * * *"  # Runs every 15 minutes from 11:30 AM to 10:30 PM IST
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: 3.11
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Run Prediction Script
+        run: python predict.py
+
+      - name: Commit and Push Changes
+        run: |
+          git config --global user.name 'github-actions'
+          git config --global user.email 'github-actions@github.com'
+          git add *.csv
+          git commit -m "Auto update predictions"
+          git push
+        continue-on-error: true
