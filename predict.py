@@ -9,8 +9,8 @@ from collections import Counter
 import os
 
 # Telegram settings
-TOKEN = "your_bot_token"
-CHAT_ID = "your_chat_id"
+TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"
+CHAT_ID = "YOUR_CHAT_ID"
 
 def send_telegram_message(text):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
@@ -33,30 +33,24 @@ MARKETS = {
     "Main Bazar": "https://dpbossattamatka.com/panel-chart-record/main-bazar.php"
 }
 
-# Date setup
 today = datetime.today().date()
 tomorrow = today + timedelta(days=1)
 today_str = today.strftime("%d/%m/%Y")
 tomorrow_str = tomorrow.strftime("%d/%m/%Y")
 
-# Load CSV
+# Load or create CSV
 if os.path.exists(CSV_FILE):
     df = pd.read_csv(CSV_FILE)
     df['Date'] = pd.to_datetime(df['Date'], dayfirst=True, errors='coerce')
 else:
-    df = pd.DataFrame(columns=['Date', 'Market', 'Open', 'Jodi', 'Close', 'Predicted', 'Matched'])
+    df = pd.DataFrame(columns=['Date', 'Market', 'Open', 'Jodi', 'Close'])
 
-has_today_results = df[df['Date'].dt.date == today][['Open', 'Jodi', 'Close']].dropna().shape[0] > 0
-has_tomorrow_predictions = df[(df['Date'].dt.date == tomorrow) & (df['Predicted'] == 'Yes')].shape[0] > 0
+# Ensure required columns
+for col in ['Predicted', 'Matched', 'Posted', 'PostedAll']:
+    if col not in df.columns:
+        df[col] = 'No'
 
-if not has_today_results:
-    print("Results for today not found. Skipping prediction.")
-    exit()
-
-if has_tomorrow_predictions:
-    print("Predictions for tomorrow already exist. Skipping prediction.")
-    exit()
-
+# Scraping
 def parse_cell(cell):
     parts = cell.decode_contents().split('<br>')
     return ''.join(BeautifulSoup(p, 'html.parser').get_text(strip=True) for p in parts)
@@ -106,13 +100,16 @@ for market, url in MARKETS.items():
                 'Jodi': record['Jodi'],
                 'Close': record['Close'],
                 'Predicted': 'No',
-                'Matched': 'No'
+                'Matched': 'No',
+                'Posted': 'No',
+                'PostedAll': 'No'
             })
 
 if new_rows:
     df = pd.concat([df, pd.DataFrame(new_rows)], ignore_index=True)
     df.to_csv(CSV_FILE, index=False)
 
+# Add features
 df['open_sum'] = df['Open'].apply(lambda x: sum(int(d) for d in str(x) if d.isdigit()) % 10)
 df['close_sum'] = df['Close'].apply(lambda x: sum(int(d) for d in str(x) if d.isdigit()) % 10)
 df['jodi_first'] = df['Jodi'].astype(str).str[0].astype(int, errors='ignore')
@@ -127,10 +124,23 @@ df['is_weekend'] = df['day_of_week'].isin(['Saturday', 'Sunday']).astype(int)
 features = ['open_sum', 'close_sum', 'jodi_first', 'jodi_second',
             'mirror_first', 'mirror_second', 'day_label', 'is_weekend']
 
+# Per-market predictions
 results = []
 
 for market in df['Market'].unique():
-    mdf = df[df['Market'] == market].sort_values('Date').dropna(subset=features + ['Jodi'])
+    mdf = df[df['Market'] == market].sort_values('Date')
+
+    today_data = mdf[mdf['Date'].dt.date == today]
+    if today_data[['Open', 'Jodi', 'Close']].dropna().empty:
+        continue
+
+    # Skip if already predicted for tomorrow
+    tomorrow_data = mdf[(mdf['Date'].dt.date == tomorrow) & (mdf['Predicted'] == 'Yes')]
+    if not tomorrow_data.empty:
+        continue
+
+    # Filter & prepare training
+    mdf = mdf.dropna(subset=features + ['Jodi'])
     if len(mdf) < 60:
         continue
     mdf = mdf.tail(60)
@@ -152,7 +162,6 @@ for market in df['Market'].unique():
     digit_counts = Counter(digits)
     pred_open = [d[0] for d in digit_counts.most_common(2)]
     pred_close = [d[0] for d in digit_counts.most_common(4)[2:4]]
-
     pattis = [j[0] + j[1] + d for j in top_jodis[:4] for d in "0123456789"]
     pred_patti = pattis[:4]
 
@@ -164,18 +173,41 @@ for market in df['Market'].unique():
         'Jodi': ', '.join(top_jodis),
         'Patti': ', '.join(pred_patti),
         'Predicted': 'Yes',
-        'Matched': 'No'
+        'Matched': 'No',
+        'Posted': 'No',
+        'PostedAll': 'No'
     })
 
-    msg = (
-    f"*{market}*\n"
-    f"*{tomorrow_str}*\n"
-    f"*Open:* {', '.join(pred_open)}\n"
-    f"*Close:* {', '.join(pred_close)}\n"
-    f"*Jodi:* {', '.join(top_jodis)}\n"
-    f"*Patti:* {', '.join(pred_patti)}"
-)
-    send_telegram_message(msg)
+    if not df[(df['Date'].dt.date == tomorrow) & (df['Market'] == market) & (df['Posted'] == 'Yes')].any().any():
+        msg = (
+            f"*{market}*\n"
+            f"*{tomorrow_str}*\n"
+            f"*Open:* {', '.join(pred_open)}\n"
+            f"*Close:* {', '.join(pred_close)}\n"
+            f"*Jodi:* {', '.join(top_jodis)}\n"
+            f"*Patti:* {', '.join(pred_patti)}"
+        )
+        send_telegram_message(msg)
+        df.loc[(df['Date'].dt.date == tomorrow) & (df['Market'] == market), 'Posted'] = 'Yes'
 
+# Update all predictions
 df = pd.concat([df, pd.DataFrame(results)], ignore_index=True)
 df.to_csv(CSV_FILE, index=False)
+
+# 12 AM bulk posting (IST)
+now = datetime.utcnow() + timedelta(hours=5, minutes=30)
+if now.hour == 0:
+    to_post = df[(df['Date'].dt.date == tomorrow) & (df['PostedAll'] == 'No') & (df['Predicted'] == 'Yes')]
+    if not to_post.empty:
+        full_msg = "*Predictions for all markets:*\n\n"
+        for _, row in to_post.iterrows():
+            full_msg += (
+                f"*{row['Market']}*\n"
+                f"*Open:* {row['Open']}\n"
+                f"*Close:* {row['Close']}\n"
+                f"*Jodi:* {row['Jodi']}\n"
+                f"*Patti:* {row['Patti']}\n\n"
+            )
+        send_telegram_message(full_msg)
+        df.loc[(df['Date'].dt.date == tomorrow), 'PostedAll'] = 'Yes'
+        df.to_csv(CSV_FILE, index=False)
