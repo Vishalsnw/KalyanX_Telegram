@@ -10,8 +10,8 @@ import sys
 import os
 
 # Telegram settings
-TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"
-CHAT_ID = "YOUR_CHAT_ID"
+TOKEN = "7121966371:AAEKHVrsqLRswXg64-6Nf3nid-Mbmlmmw5M"
+CHAT_ID = "7621883960"
 bot = Bot(token=TOKEN)
 
 MARKET_URLS = {
