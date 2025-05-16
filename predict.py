@@ -1,18 +1,19 @@
 import pandas as pd
 import requests
 from bs4 import BeautifulSoup
-from datetime import datetime
+from datetime import datetime, timedelta
 from sklearn.ensemble import RandomForestClassifier
 from telegram import Bot
 from telegram.constants import ParseMode
 import numpy as np
+import sys
+import os
 
-# Telegram settings (hardcoded)
-TOKEN = "7121966371:AAEKHVrsqLRswXg64-6Nf3nid-Mbmlmmw5M"
-CHAT_ID = "7621883960"
+# Telegram settings
+TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"
+CHAT_ID = "YOUR_CHAT_ID"
 bot = Bot(token=TOKEN)
 
-# Market URLs
 MARKET_URLS = {
     "Time Bazar": "https://dpbossattamatka.com/panel-chart-record/time-bazar.php",
     "Milan Day": "https://dpbossattamatka.com/panel-chart-record/milan-day.php",
@@ -24,12 +25,14 @@ MARKET_URLS = {
 }
 
 CSV_PATH = "enhanced_satta_data.csv"
+TODAY = datetime.now().strftime("%Y-%m-%d")
+TOMORROW = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
 
 def scrape_market(url):
     try:
         res = requests.get(url, timeout=10)
         soup = BeautifulSoup(res.text, "html.parser")
-        rows = soup.find_all("tr")[1:]  # Skip header
+        rows = soup.find_all("tr")[1:]
         data = []
         for row in rows:
             cols = row.find_all("td")
@@ -56,13 +59,22 @@ def update_data():
     df = pd.DataFrame(all_data, columns=["Market", "Date", "Open", "Jodi", "Close", "Patti"])
     df.dropna(inplace=True)
     df["Date"] = pd.to_datetime(df["Date"])
-    df.to_csv(CSV_PATH, index=False)
     return df
+
+def load_or_create_csv(df):
+    if os.path.exists(CSV_PATH):
+        old = pd.read_csv(CSV_PATH, parse_dates=["Date"])
+        combined = pd.concat([old, df]).drop_duplicates(["Market", "Date"]).reset_index(drop=True)
+    else:
+        combined = df
+    if "Posted" not in combined.columns:
+        combined["Posted"] = ""
+    combined.to_csv(CSV_PATH, index=False)
+    return combined
 
 def train_and_predict(df, market):
     df = df[df["Market"] == market].copy()
-    df.sort_values("Date", inplace=True)
-    df = df.tail(60)
+    df = df.sort_values("Date").tail(60)
 
     df["Open"] = pd.to_numeric(df["Open"], errors="coerce")
     df["Close"] = pd.to_numeric(df["Close"], errors="coerce")
@@ -70,9 +82,7 @@ def train_and_predict(df, market):
     df["Patti"] = pd.to_numeric(df["Patti"], errors="coerce")
     df.dropna(inplace=True)
 
-    if len(df) < 10:
-        print(f"[SKIP] Not enough data for {market} ({len(df)} rows)")
-        return None
+    if len(df) < 10: return None
 
     features = df[["Open", "Close", "Jodi"]]
     targets = df["Patti"]
@@ -90,31 +100,56 @@ def train_and_predict(df, market):
         "Patti": int(pred_patti)
     }
 
-def send_prediction(market, prediction):
-    message = f"*{market} Prediction (Tomorrow)*\n"
-    message += f"Open: `{prediction['Open']}`\n"
-    message += f"Jodi: `{prediction['Jodi']}`\n"
-    message += f"Close: `{prediction['Close']}`\n"
-    message += f"Patti: `{prediction['Patti']}`"
-    print(f"Sending to Telegram:\n{message}\n")
-    try:
-        bot.send_message(chat_id=CHAT_ID, text=message, parse_mode=ParseMode.MARKDOWN)
-    except Exception as e:
-        print("Telegram error:", e)
+def send_prediction(market, pred, summary_mode=False):
+    message = f"*{market} Prediction ({TOMORROW})*\n"
+    message += f"Open: `{pred['Open']}`\n"
+    message += f"Jodi: `{pred['Jodi']}`\n"
+    message += f"Close: `{pred['Close']}`\n"
+    message += f"Patti: `{pred['Patti']}`"
+    print(f"\nSending:\n{message}")
+    if not summary_mode:
+        try:
+            bot.send_message(chat_id=CHAT_ID, text=message, parse_mode=ParseMode.MARKDOWN)
+        except Exception as e:
+            print("Telegram error:", e)
+    return message
+
+def mark_posted(csv_df, market):
+    csv_df.loc[(csv_df["Market"] == market) & (csv_df["Date"] == TODAY), "Posted"] = "Yes"
 
 def main():
-    print("[INFO] Updating data...")
-    df = update_data()
-    print("[INFO] Data updated.")
+    print("[INFO] Scraping fresh data...")
+    fresh_df = update_data()
+    print("[INFO] Loading combined dataset...")
+    df = load_or_create_csv(fresh_df)
 
-    markets = df["Market"].unique()
-    for market in markets:
-        print(f"[INFO] Predicting for {market}")
+    is_summary = "--summary" in sys.argv
+    all_messages = []
+
+    for market in df["Market"].unique():
+        latest = df[(df["Market"] == market)].sort_values("Date").tail(1)
+        if latest.empty or latest["Date"].dt.strftime("%Y-%m-%d").values[0] != TODAY:
+            print(f"[SKIP] {market} has no data for today.")
+            continue
+        if latest["Posted"].values[0] == "Yes" and not is_summary:
+            print(f"[SKIP] {market} already posted.")
+            continue
+
         pred = train_and_predict(df, market)
         if pred:
-            send_prediction(market, pred)
-        else:
-            print(f"[INFO] Skipped {market} (No prediction)")
+            msg = send_prediction(market, pred, summary_mode=is_summary)
+            all_messages.append(msg)
+            if not is_summary:
+                mark_posted(df, market)
+
+    if is_summary and all_messages:
+        final = "\n\n".join(all_messages)
+        try:
+            bot.send_message(chat_id=CHAT_ID, text=f"*Daily Summary ({TOMORROW})*\n\n{final}", parse_mode=ParseMode.MARKDOWN)
+        except Exception as e:
+            print("Summary send error:", e)
+
+    df.to_csv(CSV_PATH, index=False)
 
 if __name__ == "__main__":
     main()
