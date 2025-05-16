@@ -9,8 +9,8 @@ from collections import Counter
 import os
 
 # Load Telegram settings from GitHub secrets (ENV)
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+TOKEN = os.getenv("TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
 
 def send_telegram_message(text):
     if not TOKEN or not CHAT_ID:
