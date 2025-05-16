@@ -9,8 +9,8 @@ from collections import Counter
 import os
 
 # Telegram settings
-TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"
-CHAT_ID = "YOUR_CHAT_ID"
+TOKEN = "7121966371:AAEKHVrsqLRswXg64-6Nf3nid-Mbmlmmw5M"
+CHAT_ID = "7621883960"
 
 def send_telegram_message(text):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
@@ -46,9 +46,9 @@ else:
     df = pd.DataFrame(columns=['Date', 'Market', 'Open', 'Jodi', 'Close'])
 
 # Ensure required columns
-for col in ['Predicted', 'Matched', 'Posted', 'PostedAll']:
+for col in ['Predicted', 'Matched', 'Posted', 'PostedAll', 'ErrorCount']:
     if col not in df.columns:
-        df[col] = 'No'
+        df[col] = 'No' if col != 'ErrorCount' else 0
 
 # Scraping
 def parse_cell(cell):
@@ -102,7 +102,8 @@ for market, url in MARKETS.items():
                 'Predicted': 'No',
                 'Matched': 'No',
                 'Posted': 'No',
-                'PostedAll': 'No'
+                'PostedAll': 'No',
+                'ErrorCount': 0
             })
 
 if new_rows:
@@ -124,9 +125,8 @@ df['is_weekend'] = df['day_of_week'].isin(['Saturday', 'Sunday']).astype(int)
 features = ['open_sum', 'close_sum', 'jodi_first', 'jodi_second',
             'mirror_first', 'mirror_second', 'day_label', 'is_weekend']
 
-# Per-market predictions
+# Smart prediction logic per market
 results = []
-
 for market in df['Market'].unique():
     mdf = df[df['Market'] == market].sort_values('Date')
 
@@ -139,16 +139,19 @@ for market in df['Market'].unique():
     if not tomorrow_data.empty:
         continue
 
-    # Filter & prepare training
     mdf = mdf.dropna(subset=features + ['Jodi'])
     if len(mdf) < 60:
         continue
     mdf = mdf.tail(60)
+
+    # Feedback loop: increase error sample weight
+    weights = np.where(mdf['Matched'] == 'No', 2.0, 1.0)
+
     X = mdf[features]
     y = mdf['Jodi'].astype(str).str.zfill(2)
 
     model = RandomForestClassifier(n_estimators=100, max_depth=7, min_samples_split=4, random_state=42)
-    model.fit(X, y)
+    model.fit(X, y, sample_weight=weights)
 
     latest = mdf.iloc[-1]
     test = latest[features].values.reshape(1, -1)
@@ -175,38 +178,52 @@ for market in df['Market'].unique():
         'Predicted': 'Yes',
         'Matched': 'No',
         'Posted': 'No',
-        'PostedAll': 'No'
+        'PostedAll': 'No',
+        'ErrorCount': 0
     })
 
     if not df[(df['Date'].dt.date == tomorrow) & (df['Market'] == market) & (df['Posted'] == 'Yes')].any().any():
         msg = (
-            f"*{market}*\n"
-            f"*{tomorrow_str}*\n"
-            f"*Open:* {', '.join(pred_open)}\n"
-            f"*Close:* {', '.join(pred_close)}\n"
-            f"*Jodi:* {', '.join(top_jodis)}\n"
+            f"*{market}*
+"
+            f"*{tomorrow_str}*
+"
+            f"*Open:* {', '.join(pred_open)}
+"
+            f"*Close:* {', '.join(pred_close)}
+"
+            f"*Jodi:* {', '.join(top_jodis)}
+"
             f"*Patti:* {', '.join(pred_patti)}"
         )
         send_telegram_message(msg)
         df.loc[(df['Date'].dt.date == tomorrow) & (df['Market'] == market), 'Posted'] = 'Yes'
 
-# Update all predictions
+# Append all new predictions
 df = pd.concat([df, pd.DataFrame(results)], ignore_index=True)
 df.to_csv(CSV_FILE, index=False)
 
-# 12 AM bulk posting (IST)
+# Bulk post all predictions at 12 AM IST
 now = datetime.utcnow() + timedelta(hours=5, minutes=30)
 if now.hour == 0:
     to_post = df[(df['Date'].dt.date == tomorrow) & (df['PostedAll'] == 'No') & (df['Predicted'] == 'Yes')]
     if not to_post.empty:
-        full_msg = "*Predictions for all markets:*\n\n"
+        full_msg = "*Predictions for all markets:*
+
+"
         for _, row in to_post.iterrows():
             full_msg += (
-                f"*{row['Market']}*\n"
-                f"*Open:* {row['Open']}\n"
-                f"*Close:* {row['Close']}\n"
-                f"*Jodi:* {row['Jodi']}\n"
-                f"*Patti:* {row['Patti']}\n\n"
+                f"*{row['Market']}*
+"
+                f"*Open:* {row['Open']}
+"
+                f"*Close:* {row['Close']}
+"
+                f"*Jodi:* {row['Jodi']}
+"
+                f"*Patti:* {row['Patti']}
+
+"
             )
         send_telegram_message(full_msg)
         df.loc[(df['Date'].dt.date == tomorrow), 'PostedAll'] = 'Yes'
