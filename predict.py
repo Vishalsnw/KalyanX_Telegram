@@ -1,19 +1,18 @@
 import pandas as pd
 import requests
 from bs4 import BeautifulSoup
-from datetime import datetime, timedelta
+from datetime import datetime
 from sklearn.ensemble import RandomForestClassifier
 from telegram import Bot
 from telegram.constants import ParseMode
-import os
 import numpy as np
 
-# Telegram settings
-TOKEN = os.getenv("TOKEN", "your_default_token")
-CHAT_ID = os.getenv("CHAT_ID", "your_default_chat_id")
+# Telegram settings (hardcoded)
+TOKEN = "7121966371:AAEKHVrsqLRswXg64-6Nf3nid-Mbmlmmw5M"
+CHAT_ID = "7621883960"
 bot = Bot(token=TOKEN)
 
-# Source URLs
+# Market URLs
 MARKET_URLS = {
     "Time Bazar": "https://dpbossattamatka.com/panel-chart-record/time-bazar.php",
     "Milan Day": "https://dpbossattamatka.com/panel-chart-record/milan-day.php",
@@ -30,7 +29,7 @@ def scrape_market(url):
     try:
         res = requests.get(url, timeout=10)
         soup = BeautifulSoup(res.text, "html.parser")
-        rows = soup.find_all("tr")[1:]  # skip header
+        rows = soup.find_all("tr")[1:]  # Skip header
         data = []
         for row in rows:
             cols = row.find_all("td")
@@ -63,17 +62,17 @@ def update_data():
 def train_and_predict(df, market):
     df = df[df["Market"] == market].copy()
     df.sort_values("Date", inplace=True)
-    df = df.tail(60)  # last 60 days
-
-    if len(df) < 10:
-        return None
+    df = df.tail(60)
 
     df["Open"] = pd.to_numeric(df["Open"], errors="coerce")
     df["Close"] = pd.to_numeric(df["Close"], errors="coerce")
     df["Jodi"] = pd.to_numeric(df["Jodi"], errors="coerce")
     df["Patti"] = pd.to_numeric(df["Patti"], errors="coerce")
-
     df.dropna(inplace=True)
+
+    if len(df) < 10:
+        print(f"[SKIP] Not enough data for {market} ({len(df)} rows)")
+        return None
 
     features = df[["Open", "Close", "Jodi"]]
     targets = df["Patti"]
@@ -97,19 +96,25 @@ def send_prediction(market, prediction):
     message += f"Jodi: `{prediction['Jodi']}`\n"
     message += f"Close: `{prediction['Close']}`\n"
     message += f"Patti: `{prediction['Patti']}`"
+    print(f"Sending to Telegram:\n{message}\n")
     try:
         bot.send_message(chat_id=CHAT_ID, text=message, parse_mode=ParseMode.MARKDOWN)
     except Exception as e:
         print("Telegram error:", e)
 
 def main():
+    print("[INFO] Updating data...")
     df = update_data()
-    markets = df["Market"].unique()
+    print("[INFO] Data updated.")
 
+    markets = df["Market"].unique()
     for market in markets:
+        print(f"[INFO] Predicting for {market}")
         pred = train_and_predict(df, market)
         if pred:
             send_prediction(market, pred)
+        else:
+            print(f"[INFO] Skipped {market} (No prediction)")
 
 if __name__ == "__main__":
     main()
