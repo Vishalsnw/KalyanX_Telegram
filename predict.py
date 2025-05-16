@@ -8,11 +8,14 @@ from sklearn.preprocessing import LabelEncoder
 from collections import Counter
 import os
 
-# Telegram settings
-TOKEN = os.getenv("TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")
+# Load Telegram settings from GitHub secrets (ENV)
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 def send_telegram_message(text):
+    if not TOKEN or not CHAT_ID:
+        print("Telegram token or chat ID not set.")
+        return
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
     data = {"chat_id": CHAT_ID, "text": text, "parse_mode": "Markdown"}
     try:
@@ -42,16 +45,16 @@ tomorrow_str = tomorrow.strftime("%d/%m/%Y")
 if os.path.exists(CSV_FILE):
     df = pd.read_csv(CSV_FILE)
     df['Date'] = pd.to_datetime(df['Date'], dayfirst=True, errors='coerce')
+    df = df[pd.notna(df['Date'])]  # Remove bad rows
 else:
     df = pd.DataFrame(columns=['Date', 'Market', 'Open', 'Jodi', 'Close'])
 
-# Ensure required columns
+# Ensure columns
 for col in ['Predicted', 'Matched', 'Posted', 'PostedAll']:
     if col not in df.columns:
         df[col] = 'No'
 
-# Scraping
-
+# Parse table helpers
 def parse_cell(cell):
     parts = cell.decode_contents().split('<br>')
     return ''.join(BeautifulSoup(p, 'html.parser').get_text(strip=True) for p in parts)
@@ -88,6 +91,7 @@ def parse_table(url):
         print(f"Error fetching {url}: {e}")
         return []
 
+# Add new data
 existing = set(zip(df['Date'].dt.strftime('%d/%m/%Y'), df['Market']))
 new_rows = []
 for market, url in MARKETS.items():
@@ -108,6 +112,8 @@ for market, url in MARKETS.items():
 
 if new_rows:
     df = pd.concat([df, pd.DataFrame(new_rows)], ignore_index=True)
+    df['Date'] = pd.to_datetime(df['Date'], dayfirst=True, errors='coerce')
+    df = df[pd.notna(df['Date'])]
     df.to_csv(CSV_FILE, index=False)
 
 # Add features
@@ -125,18 +131,14 @@ df['is_weekend'] = df['day_of_week'].isin(['Saturday', 'Sunday']).astype(int)
 features = ['open_sum', 'close_sum', 'jodi_first', 'jodi_second',
             'mirror_first', 'mirror_second', 'day_label', 'is_weekend']
 
-# Per-market predictions
+# Train & Predict
 results = []
 
 for market in df['Market'].unique():
     mdf = df[df['Market'] == market].sort_values('Date')
-
-    today_data = mdf[mdf['Date'].dt.date == today]
-    if today_data[['Open', 'Jodi', 'Close']].dropna().empty:
+    if mdf[mdf['Date'].dt.date == today][['Open', 'Jodi', 'Close']].dropna().empty:
         continue
-
-    tomorrow_data = mdf[(mdf['Date'].dt.date == tomorrow) & (mdf['Predicted'] == 'Yes')]
-    if not tomorrow_data.empty:
+    if not mdf[(mdf['Date'].dt.date == tomorrow) & (mdf['Predicted'] == 'Yes')].empty:
         continue
 
     mdf = mdf.dropna(subset=features + ['Jodi'])
@@ -149,9 +151,7 @@ for market in df['Market'].unique():
     model = RandomForestClassifier(n_estimators=100, max_depth=7, min_samples_split=4, random_state=42)
     model.fit(X, y)
 
-    latest = mdf.iloc[-1]
-    test = latest[features].values.reshape(1, -1)
-
+    test = mdf.iloc[-1][features].values.reshape(1, -1)
     probs = model.predict_proba(test)[0]
     candidates = model.classes_
     top_indices = np.argsort(probs)[-10:][::-1]
@@ -189,11 +189,11 @@ for market in df['Market'].unique():
         send_telegram_message(msg)
         df.loc[(df['Date'].dt.date == tomorrow) & (df['Market'] == market), 'Posted'] = 'Yes'
 
-# Update all predictions
+# Save predictions
 df = pd.concat([df, pd.DataFrame(results)], ignore_index=True)
 df.to_csv(CSV_FILE, index=False)
 
-# 12 AM bulk posting (IST)
+# Bulk post at 12 AM IST
 now = datetime.utcnow() + timedelta(hours=5, minutes=30)
 if now.hour == 0:
     to_post = df[(df['Date'].dt.date == tomorrow) & (df['PostedAll'] == 'No') & (df['Predicted'] == 'Yes')]
@@ -210,4 +210,3 @@ if now.hour == 0:
         send_telegram_message(full_msg)
         df.loc[(df['Date'].dt.date == tomorrow), 'PostedAll'] = 'Yes'
         df.to_csv(CSV_FILE, index=False)
-                        
