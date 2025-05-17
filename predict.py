@@ -1,161 +1,149 @@
+import os
 import pandas as pd
+import numpy as np
+import datetime
+from sklearn.neural_network import MLPClassifier
+from sklearn.preprocessing import StandardScaler
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense
+from tensorflow.keras.models import load_model
+import pickle
+from telegram import Bot
 import requests
 from bs4 import BeautifulSoup
-from datetime import datetime, timedelta
-from sklearn.ensemble import RandomForestClassifier
-from telegram import Bot
-from telegram.constants import ParseMode
-import numpy as np
-import sys
-import os
 
-# Telegram config
-TOKEN = "7121966371:AAEKHVrsqLRswXg64-6Nf3nid-Mbmlmmw5M"
+# --- CONFIG ---
+MARKET = "Kalyan"
+CSV_FILE = "enhanced_satta_data.csv"
+PRED_FILE = "today_prediction.csv"
+TELEGRAM_TOKEN = "7121966371:AAEKHVrsqLRswXg64-6Nf3nid-Mbmlmmw5M"
 CHAT_ID = "7621883960"
-bot = Bot(token=TOKEN)
 
-# Market URLs
-MARKET_URLS = {
-    "Time Bazar": "https://dpbossattamatka.com/panel-chart-record/time-bazar.php",
-    "Milan Day": "https://dpbossattamatka.com/panel-chart-record/milan-day.php",
-    "Rajdhani Day": "https://dpbossattamatka.com/panel-chart-record/rajdhani-day.php",
-    "Kalyan": "https://dpbossattamatka.com/panel-chart-record/kalyan.php",
-    "Milan Night": "https://dpbossattamatka.com/panel-chart-record/milan-night.php",
-    "Rajdhani Night": "https://dpbossattamatka.com/panel-chart-record/rajdhani-night.php",
-    "Main Bazar": "https://dpbossattamatka.com/panel-chart-record/main-bazar.php"
-}
+# --- STEP 1: SCRAPE LATEST RESULTS ---
+def scrape_kalyan_result():
+    url = "https://dpbossattamatka.com/panel-chart-record/kalyan.php"
+    res = requests.get(url)
+    soup = BeautifulSoup(res.text, "html.parser")
+    rows = soup.select("table tr")[1:]
+    data = []
+    for row in rows:
+        cols = row.find_all("td")
+        if len(cols) >= 4:
+            date = cols[0].text.strip()
+            open_patti = cols[1].text.strip()
+            jodi = cols[2].text.strip()
+            close_patti = cols[3].text.strip()
+            data.append([date, open_patti, jodi, close_patti])
+    return data
 
-CSV_PATH = "enhanced_satta_data.csv"
-TODAY = datetime.now().strftime("%Y-%m-%d")
-TOMORROW = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+# --- STEP 2: UPDATE CSV ---
+def update_csv_with_scraped(data):
+    df = pd.read_csv(CSV_FILE)
+    existing_dates = df[df["Market"] == MARKET]["Date"].unique()
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
-}
+    new_rows = []
+    for date, open_patti, jodi, close_patti in data:
+        if date not in existing_dates:
+            row = {
+                "Date": date,
+                "Market": MARKET,
+                "Open": open_patti,
+                "Jodi": jodi,
+                "Close": close_patti
+            }
+            new_rows.append(row)
 
-def scrape_market(url):
-    try:
-        res = requests.get(url, headers=HEADERS, timeout=10)
-        soup = BeautifulSoup(res.text, "html.parser")
-        rows = soup.select("table tr")[1:]  # skip header
-        print(f"[DEBUG] {url} - rows found: {len(rows)}")
-        data = []
-        for row in rows:
-            cols = row.find_all("td")
-            if len(cols) >= 5:
-                date = cols[0].text.strip()
-                open_ = cols[1].text.strip()
-                jodi = cols[2].text.strip()
-                close = cols[3].text.strip()
-                patti = cols[4].text.strip()
-                data.append([date, open_, jodi, close, patti])
-        return data
-    except Exception as e:
-        print(f"[ERROR] Scraping {url}: {e}")
-        return []
+    if new_rows:
+        new_df = pd.DataFrame(new_rows)
+        df = pd.concat([df, new_df], ignore_index=True)
+        df.to_csv(CSV_FILE, index=False)
+        print(f"[INFO] Appended {len(new_rows)} new rows.")
+    else:
+        print("[INFO] No new rows to add.")
 
-def update_data():
-    all_data = []
-    for market, url in MARKET_URLS.items():
-        scraped = scrape_market(url)
-        for row in scraped:
-            date = pd.to_datetime(row[0], errors='coerce')
-            if pd.isnull(date): continue
-            all_data.append([market, date.strftime("%Y-%m-%d")] + row[1:])
-    df = pd.DataFrame(all_data, columns=["Market", "Date", "Open", "Jodi", "Close", "Patti"])
-    df.dropna(inplace=True)
-    df["Date"] = pd.to_datetime(df["Date"])
+# --- STEP 3: FEATURE ENGINEERING ---
+def create_features(df):
+    df["day_of_week"] = pd.to_datetime(df["Date"], dayfirst=True).dt.dayofweek
+    df["is_weekend"] = df["day_of_week"].isin([5, 6]).astype(int)
+    df["open_sum"] = df["Open"].astype(str).str[:1].astype(int) + df["Open"].astype(str).str[1:2].astype(int)
+    df["close_sum"] = df["Close"].astype(str).str[:1].astype(int) + df["Close"].astype(str).str[1:2].astype(int)
+    df["mirror_open"] = df["Open"].astype(str).apply(lambda x: str(9 - int(x[0])) + str(9 - int(x[1])) if len(x) == 2 else "00")
+    df["mirror_close"] = df["Close"].astype(str).apply(lambda x: str(9 - int(x[0])) + str(9 - int(x[1])) if len(x) == 2 else "00")
+    df["reverse_jodi"] = df["Jodi"].astype(str).apply(lambda x: x[::-1])
+    df["is_holiday"] = 0
+    df["prev_jodi_distance"] = df["Jodi"].astype(int).diff().abs().fillna(0)
     return df
 
-def load_or_create_csv(df):
-    if os.path.exists(CSV_PATH):
-        old = pd.read_csv(CSV_PATH, parse_dates=["Date"])
-        combined = pd.concat([old, df]).drop_duplicates(["Market", "Date"]).reset_index(drop=True)
-    else:
-        combined = df
-    if "Posted" not in combined.columns:
-        combined["Posted"] = ""
-    combined.to_csv(CSV_PATH, index=False)
-    return combined
+# --- STEP 4: TRAIN + SAVE MODELS ---
+def train_models(df):
+    df = df[df["Market"] == MARKET].dropna()
+    df = create_features(df)
+    feature_cols = ["day_of_week", "is_weekend", "open_sum", "close_sum", "prev_jodi_distance"]
+    X = df[feature_cols]
+    y = df["Jodi"].astype(int)
 
-def train_and_predict(df, market):
-    df = df[df["Market"] == market].copy()
-    df = df.sort_values("Date").tail(60)
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
 
-    df["Open"] = pd.to_numeric(df["Open"], errors="coerce")
-    df["Close"] = pd.to_numeric(df["Close"], errors="coerce")
-    df["Jodi"] = pd.to_numeric(df["Jodi"], errors="coerce")
-    df["Patti"] = pd.to_numeric(df["Patti"], errors="coerce")
-    df.dropna(inplace=True)
+    mlp = MLPClassifier(hidden_layer_sizes=(50,), max_iter=1000)
+    mlp.fit(X_scaled, y)
 
-    if len(df) < 10: return None
+    keras_model = Sequential([
+        Dense(64, activation='relu', input_shape=(X_scaled.shape[1],)),
+        Dense(32, activation='relu'),
+        Dense(1, activation='linear')
+    ])
+    keras_model.compile(optimizer='adam', loss='mse')
+    keras_model.fit(X_scaled, y, epochs=50, verbose=0)
 
-    features = df[["Open", "Close", "Jodi"]]
-    targets = df["Patti"]
+    with open("scaler.pkl", "wb") as f:
+        pickle.dump(scaler, f)
+    with open("kalyan_mlp_model.pkl", "wb") as f:
+        pickle.dump(mlp, f)
+    keras_model.save("kalyan_model.h5")
 
-    model = RandomForestClassifier(n_estimators=100)
-    model.fit(features, targets)
+    return scaler, mlp, keras_model
 
-    last = features.iloc[-1:]
-    pred_patti = model.predict(last)[0]
+# --- STEP 5: PREDICT NEXT JODI ---
+def predict_next(df, scaler, mlp, keras_model):
+    df = df[df["Market"] == MARKET]
+    last_row = df.sort_values("Date").iloc[-1:]
+    last_row = create_features(last_row)
 
-    return {
-        "Open": int(last["Open"].values[0]),
-        "Close": int(last["Close"].values[0]),
-        "Jodi": int(last["Jodi"].values[0]),
-        "Patti": int(pred_patti)
+    X_next = last_row[["day_of_week", "is_weekend", "open_sum", "close_sum", "prev_jodi_distance"]]
+    X_scaled = scaler.transform(X_next)
+
+    proba = mlp.predict_proba(X_scaled)[0]
+    top_10 = np.argsort(proba)[-10:][::-1]
+
+    keras_pred = int(round(keras_model.predict(X_scaled)[0][0]))
+
+    preds = {
+        "mlp_top_10": [str(j).zfill(2) for j in top_10],
+        "keras_pred": str(keras_pred).zfill(2)
     }
 
-def send_prediction(market, pred, summary_mode=False):
-    message = f"*{market} Prediction ({TOMORROW})*\n"
-    message += f"Open: `{pred['Open']}`\n"
-    message += f"Jodi: `{pred['Jodi']}`\n"
-    message += f"Close: `{pred['Close']}`\n"
-    message += f"Patti: `{pred['Patti']}`"
-    print(f"\nSending:\n{message}")
-    if not summary_mode:
-        try:
-            bot.send_message(chat_id=CHAT_ID, text=message, parse_mode=ParseMode.MARKDOWN)
-        except Exception as e:
-            print("Telegram error:", e)
-    return message
+    today = datetime.datetime.now().strftime("%d/%m/%Y")
+    pd.DataFrame([{
+        "Date": today,
+        "Market": MARKET,
+        "Top10_MLP": ",".join(preds["mlp_top_10"]),
+        "Keras": preds["keras_pred"]
+    }]).to_csv(PRED_FILE, index=False)
 
-def mark_posted(csv_df, market):
-    csv_df.loc[(csv_df["Market"] == market) & (csv_df["Date"] == TODAY), "Posted"] = "Yes"
+    return preds
 
-def main():
-    print("[INFO] Scraping fresh data...")
-    fresh_df = update_data()
-    print("[INFO] Loading combined dataset...")
-    df = load_or_create_csv(fresh_df)
+# --- STEP 6: TELEGRAM ALERT ---
+def send_telegram(preds):
+    message = f"**KALYAN Prediction**\n\nTop 10 Jodis (MLP): {', '.join(preds['mlp_top_10'])}\nKeras Jodi: {preds['keras_pred']}"
+    Bot(token=TELEGRAM_TOKEN).send_message(chat_id=CHAT_ID, text=message, parse_mode='Markdown')
 
-    is_summary = "--summary" in sys.argv
-    all_messages = []
-
-    for market in df["Market"].unique():
-        latest = df[(df["Market"] == market)].sort_values("Date").tail(1)
-        if latest.empty or latest["Date"].dt.strftime("%Y-%m-%d").values[0] != TODAY:
-            print(f"[SKIP] {market} has no data for today.")
-            continue
-        if latest["Posted"].values[0] == "Yes" and not is_summary:
-            print(f"[SKIP] {market} already posted.")
-            continue
-
-        pred = train_and_predict(df, market)
-        if pred:
-            msg = send_prediction(market, pred, summary_mode=is_summary)
-            all_messages.append(msg)
-            if not is_summary:
-                mark_posted(df, market)
-
-    if is_summary and all_messages:
-        final = "\n\n".join(all_messages)
-        try:
-            bot.send_message(chat_id=CHAT_ID, text=f"*Daily Summary ({TOMORROW})*\n\n{final}", parse_mode=ParseMode.MARKDOWN)
-        except Exception as e:
-            print("Summary send error:", e)
-
-    df.to_csv(CSV_PATH, index=False)
-
+# --- RUN ALL ---
 if __name__ == "__main__":
-    main()
+    scraped_data = scrape_kalyan_result()
+    update_csv_with_scraped(scraped_data)
+    df = pd.read_csv(CSV_FILE)
+    scaler, mlp, keras_model = train_models(df)
+    preds = predict_next(df, scaler, mlp, keras_model)
+    send_telegram(preds)
+    print("[DONE] Prediction complete and Telegram sent.")
