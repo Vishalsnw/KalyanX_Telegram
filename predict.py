@@ -1,29 +1,37 @@
-# satta_predictor.py
+# satta_prediction_advanced.py
+
 import os
 import requests
-from bs4 import BeautifulSoup
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
+from bs4 import BeautifulSoup
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import GridSearchCV
+from sklearn.metrics import accuracy_score
+from xgboost import XGBClassifier
+from keras.models import Sequential
+from keras.layers import LSTM, Dense
+from keras.preprocessing.sequence import TimeseriesGenerator
 from collections import Counter
 import joblib
 
-TELEGRAM_BOT_TOKEN = "<your_token_here>"
-CHAT_ID = "<your_chat_id_here>"
+TELEGRAM_BOT_TOKEN = "7121966371:AAEKHVrsqLRswXg64-6Nf3nid-Mbmlmmw5M"
+CHAT_ID = "7621883960"
 CSV_FILE = "satta_data.csv"
-LOG_FILE = "prediction_log.csv"
+ACCURACY_LOG = "accuracy_log.csv"
 HEADERS = {"User-Agent": "Mozilla/5.0"}
 
 MARKETS = {
+    "Kalyan": "https://dpbossattamatka.com/panel-chart-record/kalyan.php",
+    "Main Bazar": "https://dpbossattamatka.com/panel-chart-record/main-bazar.php",
     "Time Bazar": "https://dpbossattamatka.com/panel-chart-record/time-bazar.php",
     "Milan Day": "https://dpbossattamatka.com/panel-chart-record/milan-day.php",
     "Rajdhani Day": "https://dpbossattamatka.com/panel-chart-record/rajdhani-day.php",
-    "Kalyan": "https://dpbossattamatka.com/panel-chart-record/kalyan.php",
     "Milan Night": "https://dpbossattamatka.com/panel-chart-record/milan-night.php",
-    "Rajdhani Night": "https://dpbossattamatka.com/panel-chart-record/rajdhani-night.php",
-    "Main Bazar": "https://dpbossattamatka.com/panel-chart-record/main-bazar.php"
+    "Rajdhani Night": "https://dpbossattamatka.com/panel-chart-record/rajdhani-night.php"
 }
+
 
 def send_telegram_message(msg):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -33,9 +41,11 @@ def send_telegram_message(msg):
     except Exception as e:
         print("Telegram error:", e)
 
+
 def parse_cell(cell):
     parts = cell.decode_contents().split('<br>')
     return ''.join(BeautifulSoup(p, 'html.parser').get_text(strip=True) for p in parts)
+
 
 def parse_table(url):
     results = []
@@ -70,87 +80,93 @@ def parse_table(url):
         print(f"Error fetching {url}: {e}")
         return []
 
-def get_next_prediction_date():
-    next_day = datetime.now() + timedelta(days=1)
-    if next_day.weekday() == 6:
-        next_day += timedelta(days=1)
-    return next_day.strftime("%d/%m/%Y")
 
+def engineer_features(df):
+    df['Weekday'] = df['Date'].dt.weekday
+    df['Prev_Jodi'] = df['Jodi'].shift(1).fillna(0).astype(int)
+    df['Gap'] = (df['Jodi'] - df['Prev_Jodi']).abs()
+    df['Jodi_Pos1'] = df['Jodi'].astype(str).str.zfill(2).str[0].astype(int)
+    df['Jodi_Pos2'] = df['Jodi'].astype(str).str.zfill(2).str[1].astype(int)
+    return df.dropna()
+
+
+def train_models(X, y):
+    models = {}
+    scores = {}
+
+    rf = GridSearchCV(RandomForestClassifier(), {'n_estimators': [100, 200]})
+    rf.fit(X, y)
+    models['RandomForest'] = rf.best_estimator_
+    scores['RandomForest'] = rf.score(X, y)
+
+    xgb = GridSearchCV(XGBClassifier(), {'n_estimators': [100, 150]})
+    xgb.fit(X, y)
+    models['XGBoost'] = xgb.best_estimator_
+    scores['XGBoost'] = xgb.score(X, y)
+
+    return models[max(scores, key=scores.get)], scores
+
+
+def predict_next(model, X_last):
+    return model.predict(X_last)[0]
+
+
+# Load data
 try:
     df = pd.read_csv(CSV_FILE)
-    existing = set(zip(df['Date'], df['Market']))
+    df['Date'] = pd.to_datetime(df['Date'], dayfirst=True)
 except:
     df = pd.DataFrame(columns=['Date', 'Market', 'Open', 'Jodi', 'Close'])
-    existing = set()
 
-new_rows = []
+# Scrape new data
 for market, url in MARKETS.items():
     records = parse_table(url)
-    for record in records:
-        if (record['Date'], market) not in existing:
-            new_rows.append({
-                'Date': record['Date'],
-                'Market': market,
-                'Open': record['Open'],
-                'Jodi': record['Jodi'],
-                'Close': record['Close']
-            })
+    for r in records:
+        r['Market'] = market
+    df = pd.concat([df, pd.DataFrame(records)], ignore_index=True)
+    df.drop_duplicates(subset=['Date', 'Market'], inplace=True)
 
-if new_rows:
-    df = pd.concat([df, pd.DataFrame(new_rows)], ignore_index=True)
-    df.to_csv(CSV_FILE, index=False)
+df.to_csv(CSV_FILE, index=False)
 
-df['Date'] = pd.to_datetime(df['Date'], dayfirst=True, errors='coerce')
-df = df.dropna(subset=['Date', 'Jodi', 'Open', 'Close'])
+# Prediction date
+today = datetime.today()
+next_day = today + timedelta(days=1)
+if next_day.weekday() == 6:  # Sunday
+    next_day += timedelta(days=1)
+predict_date = next_day.strftime("%d/%m/%Y")
 
-predictions = []
-pred_date = get_next_prediction_date()
+# Prediction
+final_predictions = []
 
 for market in df['Market'].unique():
-    mdf = df[df['Market'] == market].sort_values('Date')
-    mdf = mdf.tail(60)
+    mdf = df[df['Market'] == market].copy()
+    mdf['Jodi'] = mdf['Jodi'].astype(str).str.zfill(2).astype(int)
+    mdf = engineer_features(mdf)
 
-    if len(mdf) < 10:
-        continue
+    features = ['Prev_Jodi', 'Gap', 'Jodi_Pos1', 'Jodi_Pos2', 'Weekday']
+    target = 'Jodi'
 
-    # ML model input preparation
-    jodis = mdf['Jodi'].astype(str).str.zfill(2)
-    open_digits = jodis.str[0].astype(int)
-    close_digits = jodis.str[1].astype(int)
+    model, scores = train_models(mdf[features], mdf[target])
+    joblib.dump(model, f"model_{market}.pkl")
 
-    open_common = [str(d) for d, _ in Counter(open_digits).most_common(2)]
-    close_common = [str(d) for d, _ in Counter(close_digits).most_common(2)]
-    jodi_common = [j for j, _ in Counter(jodis).most_common(10)]
+    X_last = mdf[features].tail(1)
+    jodi_pred = predict_next(model, X_last)
+    open_pred = str(jodi_pred).zfill(2)[0]
+    close_pred = str(jodi_pred).zfill(2)[1]
 
-    pattis = [o + j[0] + c for o, j, c in zip(mdf['Open'].astype(str), jodis, mdf['Close'].astype(str)) if o.isdigit() and c.isdigit()]
-    patti_common = [p for p in pattis if len(p) == 3 or len(p) == 4][-4:]
+    patti_candidates = [str(o)+str(jodi_pred)[0]+str(c) for o, c in zip(mdf['Open'].astype(str), mdf['Close'].astype(str)) if o.isdigit() and c.isdigit()]
+    pattis = [p for p, _ in Counter(patti_candidates).most_common(4)]
 
-    prediction = f"""
+    message = f"""
 <b>{market.upper()}</b>
-<b>{pred_date}</b>
-<b>Open:</b> {', '.join(open_common)}
-<b>Close:</b> {', '.join(close_common)}
-<b>Jodi:</b> {', '.join(jodi_common)}
-<b>Patti:</b> {', '.join(patti_common)}"""
+<b>{predict_date}</b>
+<b>Open :</b> {open_pred}
+<b>Close :</b> {close_pred}
+<b>Jodi :</b> {str(jodi_pred).zfill(2)}
+<b>Patti :</b> {', '.join(pattis)}
+"""
+    final_predictions.append(message)
 
-    predictions.append(prediction)
-    send_telegram_message(prediction)
-
-    # Log prediction
-    log_data = pd.DataFrame([{
-        'Date': pred_date,
-        'Market': market,
-        'Open': ','.join(open_common),
-        'Close': ','.join(close_common),
-        'Jodi': ','.join(jodi_common),
-        'Patti': ','.join(patti_common),
-        'Matched': ''
-    }])
-    if os.path.exists(LOG_FILE):
-        log_df = pd.read_csv(LOG_FILE)
-        log_df = pd.concat([log_df, log_data], ignore_index=True)
-    else:
-        log_df = log_data
-    log_df.to_csv(LOG_FILE, index=False)
-
-print("Predictions sent.")
+send_telegram_message("\n\n".join(final_predictions))
+print("Prediction sent.")
+    
