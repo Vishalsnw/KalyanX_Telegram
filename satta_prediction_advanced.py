@@ -1,7 +1,7 @@
-
 import pandas as pd
 import numpy as np
 import requests
+import os
 from datetime import datetime, timedelta
 import joblib
 from sklearn.ensemble import RandomForestClassifier
@@ -36,7 +36,14 @@ def load_data():
 
 def preprocess_features(df, market):
     df_market = df[df["Market"] == market].copy()
-    df_market = df_market.dropna(subset=["Jodi", "Open", "Close", "Patti"])
+    
+    required_cols = ["Jodi", "Open", "Close", "Patti"]
+    for col in required_cols:
+        if col not in df_market.columns or df_market[col].isnull().all():
+            print(f"Skipping {market} — missing column: {col}")
+            return None
+
+    df_market = df_market.dropna(subset=required_cols)
     df_market = df_market.tail(60)
 
     df_market["Open"] = df_market["Open"].astype(int)
@@ -68,7 +75,7 @@ def train_models(df, feature_col, target_col):
     xgb = XGBClassifier()
     xgb.fit(X_train, y_train)
 
-    # LSTM requires 3D input
+    # LSTM
     scaler = MinMaxScaler()
     X_scaled = scaler.fit_transform(X)
     generator = TimeseriesGenerator(X_scaled, y, length=3, batch_size=1)
@@ -85,18 +92,19 @@ def ensemble_predict(models, scaler, X_input):
     preds.append(int(xgb.predict(X_input)[0]))
 
     X_scaled = scaler.transform(X_input)
+    if len(X_scaled) < 3:
+        X_scaled = np.vstack([X_scaled]*3)  # pad if not enough data
     seq_input = np.array([X_scaled[-3:]])
     lstm_pred = lstm.predict(seq_input, verbose=0)
     preds.append(int(np.argmax(lstm_pred)))
 
-    # Voting logic
     final = max(set(preds), key=preds.count)
     return final
 
 def predict_for_market(df, market):
     df_market = preprocess_features(df, market)
-    if len(df_market) < 10:
-        print(f"Not enough data for {market}")
+    if df_market is None or len(df_market) < 10:
+        print(f"Skipping {market} due to insufficient data.")
         return None
 
     latest_row = df_market.iloc[-1]
@@ -104,9 +112,13 @@ def predict_for_market(df, market):
 
     predictions = {}
     for col in ["Open", "Close", "Jodi", "Patti"]:
-        rf, xgb, lstm, scaler = train_models(df_market, "Open", col)
-        pred = ensemble_predict((rf, xgb, lstm), scaler, features)
-        predictions[col] = pred
+        try:
+            rf, xgb, lstm, scaler = train_models(df_market, "Open", col)
+            pred = ensemble_predict((rf, xgb, lstm), scaler, features)
+            predictions[col] = pred
+        except Exception as e:
+            print(f"Error predicting {col} for {market}: {e}")
+            predictions[col] = "?"
 
     return predictions
 
@@ -128,11 +140,12 @@ def main():
         except Exception as e:
             print(f"Error predicting for {market}: {e}")
 
-    df_log = pd.DataFrame(prediction_log, columns=["Date", "Market", "Open", "Close", "Jodi", "Patti", "Posted"])
-    if os.path.exists("predictions.csv"):
-        old = pd.read_csv("predictions.csv")
-        df_log = pd.concat([old, df_log]).drop_duplicates(subset=["Date", "Market"], keep="last")
-    df_log.to_csv("predictions.csv", index=False)
+    if prediction_log:
+        df_log = pd.DataFrame(prediction_log, columns=["Date", "Market", "Open", "Close", "Jodi", "Patti", "Posted"])
+        if os.path.exists("predictions.csv"):
+            old = pd.read_csv("predictions.csv")
+            df_log = pd.concat([old, df_log]).drop_duplicates(subset=["Date", "Market"], keep="last")
+        df_log.to_csv("predictions.csv", index=False)
 
 if __name__ == "__main__":
     main()
