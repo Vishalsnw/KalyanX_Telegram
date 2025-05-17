@@ -6,3 +6,5 @@ lxml
 schedule
 beautifulsoup4
 python-telegram-bot==20.3
+tenserflow
+joblib
