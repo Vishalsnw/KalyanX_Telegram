@@ -1,0 +1,41 @@
+*TIME BAZAR*
+*Open :* 4, 1
+*Close :* 7, 8
+*Jodi :* 17, 85, 36, 82, 13, 80, 45, 09, 27, 08
+*Patti :* 
+
+*MILAN DAY*
+*Open :* 3, 4
+*Close :* 6, 8
+*Jodi :* 36, 34, 26, 44, 29, 42, 28, 66, 38, 03
+*Patti :* 
+
+*RAJDHANI DAY*
+*Open :* 3, 9
+*Close :* 3, 5
+*Jodi :* 33, 96, 83, 05, 65, 13, 29, 52, 40, 15
+*Patti :* 
+
+*KALYAN*
+*Open :* 0, 4
+*Close :* 3, 4
+*Jodi :* 44, 00, 62, 01, 83, 82, 14, 33, 96, 04
+*Patti :* 
+
+*MILAN NIGHT*
+*Open :* 8, 0
+*Close :* 5, 7
+*Jodi :* 05, 51, 89, 78, 93, 82, 23, 37, 64, 45
+*Patti :* 
+
+*RAJDHANI NIGHT*
+*Open :* 4, 7
+*Close :* 8, 1
+*Jodi :* 48, 21, 28, 44, 17, 62, 71, 45, 58, 85
+*Patti :* 
+
+*MAIN BAZAR*
+*Open :* 9, 7
+*Close :* 3, 9
+*Jodi :* 76, 16, 99, 57, 27, 03, 50, 13, 09, 90
+*Patti :* 
