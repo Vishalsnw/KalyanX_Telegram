@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 import requests
 import os
-from datetime import datetime, timedelta
+from datetime import datetime
 import joblib
 from sklearn.ensemble import RandomForestClassifier
 from xgboost import XGBClassifier
@@ -10,7 +10,7 @@ from keras.models import Sequential
 from keras.layers import LSTM, Dense, Dropout
 from keras.preprocessing.sequence import TimeseriesGenerator
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import MinMaxScaler, LabelEncoder
+from sklearn.preprocessing import MinMaxScaler
 
 import warnings
 warnings.filterwarnings("ignore")
@@ -37,7 +37,7 @@ def load_data():
 def preprocess_features(df, market):
     df_market = df[df["Market"] == market].copy()
     
-    required_cols = ["Jodi", "Open", "Close", "Patti"]
+    required_cols = ["Jodi", "Open", "Close"]
     for col in required_cols:
         if col not in df_market.columns or df_market[col].isnull().all():
             print(f"Skipping {market} — missing column: {col}")
@@ -46,10 +46,12 @@ def preprocess_features(df, market):
     df_market = df_market.dropna(subset=required_cols)
     df_market = df_market.tail(60)
 
+    df_market["Jodi"] = df_market["Jodi"].astype(str).str.zfill(2)
+    df_market["OpenDigit"] = df_market["Jodi"].str[0].astype(int)
+    df_market["CloseDigit"] = df_market["Jodi"].str[1].astype(int)
     df_market["Open"] = df_market["Open"].astype(int)
     df_market["Close"] = df_market["Close"].astype(int)
-    df_market["Jodi"] = df_market["Jodi"].astype(int)
-    df_market["Patti"] = df_market["Patti"].astype(int)
+    df_market["Patti"] = df_market["Open"]  # You can switch to Close if preferred
     df_market["Weekday"] = df_market["Date"].dt.weekday
     return df_market
 
@@ -63,8 +65,8 @@ def build_lstm_model(input_shape, output_classes):
     model.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=['accuracy'])
     return model
 
-def train_models(df, feature_col, target_col):
-    X = df[[feature_col, "Weekday"]]
+def train_models(df, target_col):
+    X = df[["OpenDigit", "CloseDigit", "Weekday"]]
     y = df[target_col].astype(int)
 
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
@@ -93,7 +95,7 @@ def ensemble_predict(models, scaler, X_input):
 
     X_scaled = scaler.transform(X_input)
     if len(X_scaled) < 3:
-        X_scaled = np.vstack([X_scaled]*3)  # pad if not enough data
+        X_scaled = np.vstack([X_scaled]*3)
     seq_input = np.array([X_scaled[-3:]])
     lstm_pred = lstm.predict(seq_input, verbose=0)
     preds.append(int(np.argmax(lstm_pred)))
@@ -108,12 +110,12 @@ def predict_for_market(df, market):
         return None
 
     latest_row = df_market.iloc[-1]
-    features = [[latest_row["Open"], latest_row["Weekday"]]]
+    features = [[latest_row["OpenDigit"], latest_row["CloseDigit"], latest_row["Weekday"]]]
 
     predictions = {}
     for col in ["Open", "Close", "Jodi", "Patti"]:
         try:
-            rf, xgb, lstm, scaler = train_models(df_market, "Open", col)
+            rf, xgb, lstm, scaler = train_models(df_market, col)
             pred = ensemble_predict((rf, xgb, lstm), scaler, features)
             predictions[col] = pred
         except Exception as e:
