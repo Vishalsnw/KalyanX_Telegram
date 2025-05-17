@@ -20,8 +20,10 @@ import joblib
 import tensorflow as tf
 tf.get_logger().setLevel('ERROR')
 
-TELEGRAM_BOT_TOKEN = "YOUR_BOT_TOKEN"
-CHAT_ID = "YOUR_CHAT_ID"
+# Inserted your Telegram bot token and chat ID
+TELEGRAM_BOT_TOKEN = "7121966371:AAEKHVrsqLRswXg64-6Nf3nid-Mbmlmmw5M"
+CHAT_ID = "7621883960"
+
 CSV_FILE = "satta_data.csv"
 PRED_FILE = "today_predictions.csv"
 ACCURACY_LOG = "accuracy_log.csv"
@@ -122,7 +124,7 @@ def train_models(X, y, market):
     models['RandomForest'] = rf
     scores['RandomForest'] = rf.score(X, y)
 
-    xgb = GridSearchCV(XGBClassifier(), {'n_estimators': [100, 150]}, verbosity=0)
+    xgb = GridSearchCV(XGBClassifier(verbosity=0), {'n_estimators': [100, 150]})
     xgb.fit(X, y)
     xgb_pred = xgb.predict(X.tail(1))[0]
     models['XGBoost'] = xgb
@@ -162,7 +164,7 @@ df.to_csv(CSV_FILE, index=False)
 
 today = datetime.today()
 next_day = today + timedelta(days=1)
-if next_day.weekday() == 6:
+if next_day.weekday() == 6:  # Sunday skip logic
     next_day += timedelta(days=1)
 predict_date = next_day.strftime("%d/%m/%Y")
 
@@ -205,4 +207,3 @@ send_telegram_message(message)
 
 pd.DataFrame(predictions).to_csv(PRED_FILE, index=False)
 print("Predictions sent and logged.")
-                        
