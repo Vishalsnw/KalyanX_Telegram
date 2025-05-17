@@ -1,149 +1,158 @@
 import os
 import pandas as pd
 import numpy as np
-import datetime
-from sklearn.neural_network import MLPClassifier
+from datetime import datetime, timedelta
+import joblib
 from sklearn.preprocessing import StandardScaler
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Dense
 from tensorflow.keras.models import load_model
-import pickle
-from telegram import Bot
-import requests
-from bs4 import BeautifulSoup
+import telegram
+import logging
 
-# --- CONFIG ---
-MARKET = "Kalyan"
-CSV_FILE = "enhanced_satta_data.csv"
-PRED_FILE = "today_prediction.csv"
-TELEGRAM_TOKEN = "7121966371:AAEKHVrsqLRswXg64-6Nf3nid-Mbmlmmw5M"
-CHAT_ID = "7621883960"
+# Setup logging
+logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
 
-# --- STEP 1: SCRAPE LATEST RESULTS ---
-def scrape_kalyan_result():
-    url = "https://dpbossattamatka.com/panel-chart-record/kalyan.php"
-    res = requests.get(url)
-    soup = BeautifulSoup(res.text, "html.parser")
-    rows = soup.select("table tr")[1:]
-    data = []
-    for row in rows:
-        cols = row.find_all("td")
-        if len(cols) >= 4:
-            date = cols[0].text.strip()
-            open_patti = cols[1].text.strip()
-            jodi = cols[2].text.strip()
-            close_patti = cols[3].text.strip()
-            data.append([date, open_patti, jodi, close_patti])
-    return data
+# --- Telegram Bot Setup ---
+TELEGRAM_TOKEN = '7121966371:AAEKHVrsqLRswXg64-6Nf3nid-Mbmlmmw5M'
+TELEGRAM_CHAT_ID = '7621883960'
+bot = telegram.Bot(token=TELEGRAM_TOKEN)
 
-# --- STEP 2: UPDATE CSV ---
-def update_csv_with_scraped(data):
-    df = pd.read_csv(CSV_FILE)
-    existing_dates = df[df["Market"] == MARKET]["Date"].unique()
+# --- File paths ---
+DATA_CSV = 'enhanced_satta_data.csv'   # Your main CSV file
+SCALER_PATH = 'scaler.pkl'
+MLP_MODEL_PATH = 'kalyan_mlp_model.pkl'  # Replace with your actual model name or path
+KERAS_MODEL_PATH = 'kalyan_model.h5'      # Replace with your actual keras model path
 
-    new_rows = []
-    for date, open_patti, jodi, close_patti in data:
-        if date not in existing_dates:
-            row = {
-                "Date": date,
-                "Market": MARKET,
-                "Open": open_patti,
-                "Jodi": jodi,
-                "Close": close_patti
-            }
-            new_rows.append(row)
+# --- Markets to handle ---
+MARKETS = ['kalyan', 'main-bazar', 'milan-day', 'milan-night', 'rajdhani-day', 'rajdhani-night', 'time-bazar']
 
-    if new_rows:
-        new_df = pd.DataFrame(new_rows)
-        df = pd.concat([df, new_df], ignore_index=True)
-        df.to_csv(CSV_FILE, index=False)
-        print(f"[INFO] Appended {len(new_rows)} new rows.")
-    else:
-        print("[INFO] No new rows to add.")
+# --- Date format in your CSV ---
+DATE_FORMAT = '%d/%m/%Y'
 
-# --- STEP 3: FEATURE ENGINEERING ---
-def create_features(df):
-    df["day_of_week"] = pd.to_datetime(df["Date"], dayfirst=True).dt.dayofweek
-    df["is_weekend"] = df["day_of_week"].isin([5, 6]).astype(int)
-    df["open_sum"] = df["Open"].astype(str).str[:1].astype(int) + df["Open"].astype(str).str[1:2].astype(int)
-    df["close_sum"] = df["Close"].astype(str).str[:1].astype(int) + df["Close"].astype(str).str[1:2].astype(int)
-    df["mirror_open"] = df["Open"].astype(str).apply(lambda x: str(9 - int(x[0])) + str(9 - int(x[1])) if len(x) == 2 else "00")
-    df["mirror_close"] = df["Close"].astype(str).apply(lambda x: str(9 - int(x[0])) + str(9 - int(x[1])) if len(x) == 2 else "00")
-    df["reverse_jodi"] = df["Jodi"].astype(str).apply(lambda x: x[::-1])
-    df["is_holiday"] = 0
-    df["prev_jodi_distance"] = df["Jodi"].astype(int).diff().abs().fillna(0)
+def load_data():
+    if not os.path.exists(DATA_CSV):
+        logging.error(f'Data CSV file not found: {DATA_CSV}')
+        return None
+    df = pd.read_csv(DATA_CSV)
+    # Convert date to datetime
+    df['Date'] = pd.to_datetime(df['Date'], format=DATE_FORMAT)
     return df
 
-# --- STEP 4: TRAIN + SAVE MODELS ---
-def train_models(df):
-    df = df[df["Market"] == MARKET].dropna()
-    df = create_features(df)
-    feature_cols = ["day_of_week", "is_weekend", "open_sum", "close_sum", "prev_jodi_distance"]
-    X = df[feature_cols]
-    y = df["Jodi"].astype(int)
+def save_data(df):
+    df.to_csv(DATA_CSV, index=False)
+    logging.info('CSV file updated with new data.')
 
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
+def feature_engineering(df):
+    # Example: add your real features here, this is a placeholder
+    df['open_sum'] = df['Open'] + df['Jodi']
+    df['close_sum'] = df['Close'] + df['Jodi']
+    # Add more features based on your earlier script...
+    return df
 
-    mlp = MLPClassifier(hidden_layer_sizes=(50,), max_iter=1000)
-    mlp.fit(X_scaled, y)
+def load_models():
+    if not os.path.exists(SCALER_PATH) or not os.path.exists(MLP_MODEL_PATH) or not os.path.exists(KERAS_MODEL_PATH):
+        logging.error('One or more model files missing.')
+        return None, None, None
+    scaler = joblib.load(SCALER_PATH)
+    mlp_model = joblib.load(MLP_MODEL_PATH)
+    keras_model = load_model(KERAS_MODEL_PATH)
+    logging.info('Models loaded successfully.')
+    return scaler, mlp_model, keras_model
 
-    keras_model = Sequential([
-        Dense(64, activation='relu', input_shape=(X_scaled.shape[1],)),
-        Dense(32, activation='relu'),
-        Dense(1, activation='linear')
-    ])
-    keras_model.compile(optimizer='adam', loss='mse')
-    keras_model.fit(X_scaled, y, epochs=50, verbose=0)
+def prepare_features(df, scaler):
+    feature_cols = ['open_sum', 'close_sum']  # Replace with your real feature columns
+    if len(df) == 0:
+        raise ValueError('No data to prepare features.')
+    X = df[feature_cols].values
+    X_scaled = scaler.transform(X)
+    return X_scaled
 
-    with open("scaler.pkl", "wb") as f:
-        pickle.dump(scaler, f)
-    with open("kalyan_mlp_model.pkl", "wb") as f:
-        pickle.dump(mlp, f)
-    keras_model.save("kalyan_model.h5")
+def predict_jodis(scaler, mlp_model, keras_model, df_market):
+    # Prepare features
+    X_scaled = prepare_features(df_market, scaler)
 
-    return scaler, mlp, keras_model
+    # MLP predict probabilities (for top 10 jodis)
+    probs = mlp_model.predict_proba(X_scaled)
+    # Top 10 jodis by MLP model
+    top_indices_mlp = np.argsort(probs[:,1])[-10:][::-1]
 
-# --- STEP 5: PREDICT NEXT JODI ---
-def predict_next(df, scaler, mlp, keras_model):
-    df = df[df["Market"] == MARKET]
-    last_row = df.sort_values("Date").iloc[-1:]
-    last_row = create_features(last_row)
+    # Keras model prediction (you might adjust this to your keras model's output)
+    keras_preds = keras_model.predict(X_scaled).flatten()
+    top_indices_keras = np.argsort(keras_preds)[-10:][::-1]
 
-    X_next = last_row[["day_of_week", "is_weekend", "open_sum", "close_sum", "prev_jodi_distance"]]
-    X_scaled = scaler.transform(X_next)
+    # Combine or choose predictions (simple union here)
+    combined_indices = np.unique(np.concatenate([top_indices_mlp, top_indices_keras]))
 
-    proba = mlp.predict_proba(X_scaled)[0]
-    top_10 = np.argsort(proba)[-10:][::-1]
+    top_jodis = df_market.iloc[combined_indices]['Jodi'].values.tolist()
+    logging.info(f'Top predicted jodis: {top_jodis}')
+    return top_jodis
 
-    keras_pred = int(round(keras_model.predict(X_scaled)[0][0]))
+def send_telegram_message(message):
+    try:
+        bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message)
+        logging.info('Telegram message sent.')
+    except Exception as e:
+        logging.error(f'Failed to send Telegram message: {e}')
 
-    preds = {
-        "mlp_top_10": [str(j).zfill(2) for j in top_10],
-        "keras_pred": str(keras_pred).zfill(2)
-    }
+def main():
+    df = load_data()
+    if df is None:
+        return
 
-    today = datetime.datetime.now().strftime("%d/%m/%Y")
-    pd.DataFrame([{
-        "Date": today,
-        "Market": MARKET,
-        "Top10_MLP": ",".join(preds["mlp_top_10"]),
-        "Keras": preds["keras_pred"]
-    }]).to_csv(PRED_FILE, index=False)
+    scaler, mlp_model, keras_model = load_models()
+    if not scaler or not mlp_model or not keras_model:
+        return
 
-    return preds
+    # Feature engineering for full dataset
+    df = feature_engineering(df)
 
-# --- STEP 6: TELEGRAM ALERT ---
-def send_telegram(preds):
-    message = f"**KALYAN Prediction**\n\nTop 10 Jodis (MLP): {', '.join(preds['mlp_top_10'])}\nKeras Jodi: {preds['keras_pred']}"
-    Bot(token=TELEGRAM_TOKEN).send_message(chat_id=CHAT_ID, text=message, parse_mode='Markdown')
+    # Predict & notify for each market
+    today = datetime.today().date()
+    for market in MARKETS:
+        df_market = df[df['Market'].str.lower() == market.lower()]
+        if df_market.empty:
+            logging.warning(f'No data for market: {market}')
+            continue
 
-# --- RUN ALL ---
+        # Filter for the latest available date to predict next day
+        last_date = df_market['Date'].max()
+        if last_date >= today:
+            logging.info(f'Market {market} is already updated for date {last_date.strftime(DATE_FORMAT)}')
+            continue
+
+        # Filter rows for last_date to prepare features
+        df_last = df_market[df_market['Date'] == last_date]
+
+        try:
+            top_jodis = predict_jodis(scaler, mlp_model, keras_model, df_last)
+        except Exception as e:
+            logging.error(f'Prediction error for market {market}: {e}')
+            continue
+
+        # Compose Telegram message
+        msg = f"Market: {market.title()}\nDate: {(last_date + timedelta(days=1)).strftime(DATE_FORMAT)}\nPredicted Top Jodis:\n"
+        msg += ', '.join(str(j) for j in top_jodis)
+        send_telegram_message(msg)
+
+        # Append new prediction row with placeholder actual results for next date
+        new_date = last_date + timedelta(days=1)
+        new_row = {
+            'Date': new_date.strftime(DATE_FORMAT),
+            'Market': market,
+            'Open': np.nan,    # Placeholder, actual results to be updated later
+            'Jodi': top_jodis[0], # Top predicted jodi as example
+            'Close': np.nan,
+            'day_of_week': new_date.weekday(),
+            'is_weekend': 1 if new_date.weekday() >= 5 else 0,
+            'open_sum': np.nan,
+            'close_sum': np.nan,
+            'mirror_open': np.nan,
+            'mirror_close': np.nan,
+            'reverse_jodi': np.nan,
+            'is_holiday': 0,
+            'prev_jodi_distance': np.nan,
+        }
+        df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+        save_data(df)
+
 if __name__ == "__main__":
-    scraped_data = scrape_kalyan_result()
-    update_csv_with_scraped(scraped_data)
-    df = pd.read_csv(CSV_FILE)
-    scaler, mlp, keras_model = train_models(df)
-    preds = predict_next(df, scaler, mlp, keras_model)
-    send_telegram(preds)
-    print("[DONE] Prediction complete and Telegram sent.")
+    main()
