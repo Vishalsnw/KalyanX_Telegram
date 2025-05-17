@@ -12,7 +12,7 @@ from sklearn.metrics import accuracy_score
 from xgboost import XGBClassifier
 from keras.models import Sequential
 from keras.layers import LSTM, Dense
-from keras.preprocessing.sequence import TimeseriesGenerator
+from tensorflow.keras.preprocessing.sequence import TimeseriesGenerator
 from collections import Counter
 import joblib
 
