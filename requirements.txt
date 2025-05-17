@@ -6,3 +6,5 @@ xgboost
 httpx
 numpy
 joblib
+tensorflow
+keras
