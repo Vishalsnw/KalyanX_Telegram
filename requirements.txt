@@ -1,10 +1,8 @@
-pandas
-numpy
-scikit-learn
-requests
-lxml
-schedule
 beautifulsoup4
-python-telegram-bot==20.3
-tenserflow
+requests
+pandas
+scikit-learn
+xgboost
+httpx
+numpy
 joblib
