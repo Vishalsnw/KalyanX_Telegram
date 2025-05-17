@@ -1,33 +1,35 @@
-name: Satta ML Predictions
+name: Run Satta Predictor
 
 on:
-  schedule:
-    - cron: '*/15 0-18 * * *'  # Every 15 minutes from 12:00 AM to 6:45 PM UTC (IST 5:30 AM – 11:59 PM)
   workflow_dispatch:
+  schedule:
+    - cron: '0 13 * * *'  # Runs every day at 6:30 PM IST
 
 jobs:
-  run-predict:
+  build:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v3
+    - name: Checkout repo
+      uses: actions/checkout@v3
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: 3.11
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
 
-      - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pandas numpy scikit-learn tensorflow python-telegram-bot beautifulsoup4 requests
 
-      - name: Run predict script
-        run: python predict.py
+    - name: Run predictor
+      run: python predict.py
 
-      - name: Commit updated CSV
-        run: |
-          git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
-          git add enhanced_satta_data.csv
-          git commit -m "Update enhanced_satta_data.csv [auto]" || echo "No changes to commit"
-          git push
+    - name: Commit and push updated files
+      run: |
+        git config --global user.name "github-actions"
+        git config --global user.email "actions@github.com"
+        git add enhanced_satta_data.csv today_prediction.csv
+        git commit -m "Auto: Updated data and prediction" || echo "No changes to commit"
+        git push
