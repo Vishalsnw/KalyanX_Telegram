@@ -1,166 +1,138 @@
-import os
+
 import pandas as pd
 import numpy as np
 import requests
-import joblib
 from datetime import datetime, timedelta
-from bs4 import BeautifulSoup
+import joblib
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score
 from xgboost import XGBClassifier
-from sklearn.linear_model import LogisticRegression
+from keras.models import Sequential
+from keras.layers import LSTM, Dense, Dropout
+from keras.preprocessing.sequence import TimeseriesGenerator
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import MinMaxScaler, LabelEncoder
+
 import warnings
 warnings.filterwarnings("ignore")
 
-# Constants
-MARKETS = {
-    "Kalyan": "https://dpbossattamatka.com/panel-chart-record/kalyan.php",
-    "Main Bazar": "https://dpbossattamatka.com/panel-chart-record/main-bazar.php",
-    "Time Bazar": "https://dpbossattamatka.com/panel-chart-record/time-bazar.php",
-    "Milan Day": "https://dpbossattamatka.com/panel-chart-record/milan-day.php",
-    "Rajdhani Day": "https://dpbossattamatka.com/panel-chart-record/rajdhani-day.php",
-    "Milan Night": "https://dpbossattamatka.com/panel-chart-record/milan-night.php",
-    "Rajdhani Night": "https://dpbossattamatka.com/panel-chart-record/rajdhani-night.php"
-}
-CSV_FILE = "satta_data.csv"
-PRED_FILE = "today_predictions.csv"
-BOT_TOKEN = "7121966371:AAEKHVrsqLRswXg64-6Nf3nid-Mbmlmmw5M"
+TELEGRAM_TOKEN = "7121966371:AAEKHVrsqLRswXg64-6Nf3nid-Mbmlmmw5M"
 CHAT_ID = "7621883960"
 
-HEADERS = {"User-Agent": "Mozilla/5.0"}
-
-def send_telegram_message(msg):
-    try:
-        requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-                      data={"chat_id": CHAT_ID, "text": msg, "parse_mode": "HTML"})
-    except Exception as e:
-        print("Telegram error:", e)
-
-def parse_cell(cell):
-    parts = cell.decode_contents().split('<br>')
-    return ''.join(BeautifulSoup(p, 'html.parser').get_text(strip=True) for p in parts)
-
-def parse_table(url):
-    results = []
-    try:
-        res = requests.get(url, headers=HEADERS, timeout=10)
-        res.encoding = 'utf-8'
-        soup = BeautifulSoup(res.text, 'html.parser')
-        for table in soup.find_all("table"):
-            rows = table.find_all("tr")
-            for row in rows:
-                cols = row.find_all("td")
-                if len(cols) >= 4 and 'to' in cols[0].text:
-                    try:
-                        base_date = datetime.strptime(cols[0].text.split("to")[0].strip(), "%d/%m/%Y")
-                    except:
-                        continue
-                    cells = cols[1:]
-                    total_days = len(cells) // 3
-                    for i in range(total_days):
-                        date = (base_date + pd.Timedelta(days=i)).strftime("%d/%m/%Y")
-                        o, j, c = cells[i*3:i*3+3]
-                        if '**' in o.text or '**' in j.text or '**' in c.text:
-                            continue
-                        results.append({
-                            'Date': date,
-                            'Open': parse_cell(o),
-                            'Jodi': parse_cell(j),
-                            'Close': parse_cell(c)
-                        })
-        return results
-    except Exception as e:
-        print(f"Error fetching {url}: {e}")
-        return []
-
-def prepare_features(df):
-    df['Open'] = df['Open'].astype(str).str.zfill(2)
-    df['Close'] = df['Close'].astype(str).str.zfill(2)
-    df['Jodi'] = df['Jodi'].astype(str).str.zfill(2)
-    df['OpenDigit'] = df['Open'].str[0].astype(int)
-    df['CloseDigit'] = df['Close'].str[-1].astype(int)
-    df['JodiSum'] = df['Jodi'].astype(int) % 10
-    df['Day'] = pd.to_datetime(df['Date'], dayfirst=True).dt.dayofweek
-    return df
-
-def train_predict(df, target_col):
-    df = prepare_features(df)
-    features = ['OpenDigit', 'CloseDigit', 'JodiSum', 'Day']
-    df = df.dropna(subset=[target_col])
-    X = df[features]
-    y = df[target_col].astype(str)
-
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
-
-    models = {
-        "RF": RandomForestClassifier(n_estimators=200),
-        "XGB": XGBClassifier(use_label_encoder=False, eval_metric='mlogloss'),
-        "LR": LogisticRegression()
+def send_telegram_message(message):
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    data = {
+        "chat_id": CHAT_ID,
+        "text": message,
+        "parse_mode": "HTML"
     }
+    requests.post(url, data=data)
 
-    best_model = None
-    best_acc = 0
-    best_name = ""
-
-    for name, model in models.items():
-        model.fit(X_train, y_train)
-        acc = accuracy_score(y_test, model.predict(X_test))
-        if acc > best_acc:
-            best_acc = acc
-            best_model = model
-            best_name = name
-
-    best_model.fit(X, y)
-    last_row = df.iloc[-1:][features]
-    pred = best_model.predict(last_row)[0]
-    return pred, best_name
-
-def get_latest_data():
-    all_data = []
-    for market, url in MARKETS.items():
-        records = parse_table(url)
-        for r in records:
-            r['Market'] = market
-        all_data.extend(records)
-    df = pd.DataFrame(all_data)
-    df.to_csv(CSV_FILE, index=False)
+def load_data():
+    df = pd.read_csv("satta_data.csv")
+    df.dropna(inplace=True)
+    df['Date'] = pd.to_datetime(df['Date'])
+    df = df.sort_values("Date")
     return df
+
+def preprocess_features(df, market):
+    df_market = df[df["Market"] == market].copy()
+    df_market = df_market.dropna(subset=["Jodi", "Open", "Close", "Patti"])
+    df_market = df_market.tail(60)
+
+    df_market["Open"] = df_market["Open"].astype(int)
+    df_market["Close"] = df_market["Close"].astype(int)
+    df_market["Jodi"] = df_market["Jodi"].astype(int)
+    df_market["Patti"] = df_market["Patti"].astype(int)
+    df_market["Weekday"] = df_market["Date"].dt.weekday
+    return df_market
+
+def build_lstm_model(input_shape, output_classes):
+    model = Sequential()
+    model.add(LSTM(64, input_shape=input_shape, return_sequences=True))
+    model.add(Dropout(0.2))
+    model.add(LSTM(32))
+    model.add(Dropout(0.2))
+    model.add(Dense(output_classes, activation='softmax'))
+    model.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=['accuracy'])
+    return model
+
+def train_models(df, feature_col, target_col):
+    X = df[[feature_col, "Weekday"]]
+    y = df[target_col].astype(int)
+
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+    rf = RandomForestClassifier(n_estimators=100)
+    rf.fit(X_train, y_train)
+
+    xgb = XGBClassifier()
+    xgb.fit(X_train, y_train)
+
+    # LSTM requires 3D input
+    scaler = MinMaxScaler()
+    X_scaled = scaler.fit_transform(X)
+    generator = TimeseriesGenerator(X_scaled, y, length=3, batch_size=1)
+    lstm = build_lstm_model((3, X.shape[1]), len(np.unique(y)))
+    lstm.fit(generator, epochs=10, verbose=0)
+
+    return rf, xgb, lstm, scaler
+
+def ensemble_predict(models, scaler, X_input):
+    rf, xgb, lstm = models
+    preds = []
+
+    preds.append(int(rf.predict(X_input)[0]))
+    preds.append(int(xgb.predict(X_input)[0]))
+
+    X_scaled = scaler.transform(X_input)
+    seq_input = np.array([X_scaled[-3:]])
+    lstm_pred = lstm.predict(seq_input, verbose=0)
+    preds.append(int(np.argmax(lstm_pred)))
+
+    # Voting logic
+    final = max(set(preds), key=preds.count)
+    return final
+
+def predict_for_market(df, market):
+    df_market = preprocess_features(df, market)
+    if len(df_market) < 10:
+        print(f"Not enough data for {market}")
+        return None
+
+    latest_row = df_market.iloc[-1]
+    features = [[latest_row["Open"], latest_row["Weekday"]]]
+
+    predictions = {}
+    for col in ["Open", "Close", "Jodi", "Patti"]:
+        rf, xgb, lstm, scaler = train_models(df_market, "Open", col)
+        pred = ensemble_predict((rf, xgb, lstm), scaler, features)
+        predictions[col] = pred
+
+    return predictions
 
 def main():
-    print("Running prediction script...")
-    df = get_latest_data()
-    today = datetime.today()
-    predictions = []
+    df = load_data()
+    markets = df["Market"].unique()
+    today = datetime.now().strftime("%Y-%m-%d")
+    prediction_log = []
 
-    for market in MARKETS.keys():
-        mdf = df[df['Market'] == market].sort_values('Date').dropna()
-        if len(mdf) < 20: continue
+    for market in markets:
         try:
-            open_pred, open_model = train_predict(mdf, 'Open')
-            close_pred, close_model = train_predict(mdf, 'Close')
-            jodi_pred, jodi_model = train_predict(mdf, 'Jodi')
-            patti = f"{open_pred}{jodi_pred[0]}{close_pred}"
-            predictions.append({
-                "Market": market,
-                "Date": today.strftime("%d/%m/%Y"),
-                "Open": open_pred,
-                "Close": close_pred,
-                "Jodi": jodi_pred,
-                "Patti": patti,
-                "Model": f"{open_model}/{close_model}/{jodi_model}"
-            })
+            result = predict_for_market(df, market)
+            if result:
+                message = f"<b>{market} Prediction for {today}</b>\n"
+                message += f"<b>Open:</b> {result['Open']}\n<b>Close:</b> {result['Close']}\n"
+                message += f"<b>Jodi:</b> {result['Jodi']}\n<b>Patti:</b> {result['Patti']}"
+                send_telegram_message(message)
+                prediction_log.append([today, market, result['Open'], result['Close'], result['Jodi'], result['Patti'], "No"])
         except Exception as e:
             print(f"Error predicting for {market}: {e}")
 
-    pred_df = pd.DataFrame(predictions)
-    pred_df.to_csv(PRED_FILE, index=False)
-
-    msg = "<b>Predictions for Tomorrow:</b>\n\n" + "\n\n".join(
-        f"<b>{row['Market']}</b>\nOpen: <b>{row['Open']}</b>\nClose: <b>{row['Close']}</b>\nJodi: <b>{row['Jodi']}</b>\nPatti: <b>{row['Patti']}</b>"
-        for _, row in pred_df.iterrows()
-    )
-    send_telegram_message(msg)
+    df_log = pd.DataFrame(prediction_log, columns=["Date", "Market", "Open", "Close", "Jodi", "Patti", "Posted"])
+    if os.path.exists("predictions.csv"):
+        old = pd.read_csv("predictions.csv")
+        df_log = pd.concat([old, df_log]).drop_duplicates(subset=["Date", "Market"], keep="last")
+    df_log.to_csv("predictions.csv", index=False)
 
 if __name__ == "__main__":
     main()
