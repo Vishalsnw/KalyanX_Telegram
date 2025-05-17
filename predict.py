@@ -1,3 +1,4 @@
+# satta_predictor.py
 import os
 import requests
 from bs4 import BeautifulSoup
@@ -6,11 +7,12 @@ import numpy as np
 from datetime import datetime, timedelta
 from sklearn.ensemble import RandomForestClassifier
 from collections import Counter
+import joblib
 
-TELEGRAM_BOT_TOKEN = "7121966371:AAEKHVrsqLRswXg64-6Nf3nid-Mbmlmmw5M"
-CHAT_ID = "7621883960"
+TELEGRAM_BOT_TOKEN = "<your_token_here>"
+CHAT_ID = "<your_chat_id_here>"
 CSV_FILE = "satta_data.csv"
-LEARNING_LOG = "prediction_log.csv"
+LOG_FILE = "prediction_log.csv"
 HEADERS = {"User-Agent": "Mozilla/5.0"}
 
 MARKETS = {
@@ -25,7 +27,7 @@ MARKETS = {
 
 def send_telegram_message(msg):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {"chat_id": CHAT_ID, "text": msg, "parse_mode": "Markdown"}
+    payload = {"chat_id": CHAT_ID, "text": msg, "parse_mode": "HTML"}
     try:
         requests.post(url, data=payload)
     except Exception as e:
@@ -68,6 +70,12 @@ def parse_table(url):
         print(f"Error fetching {url}: {e}")
         return []
 
+def get_next_prediction_date():
+    next_day = datetime.now() + timedelta(days=1)
+    if next_day.weekday() == 6:
+        next_day += timedelta(days=1)
+    return next_day.strftime("%d/%m/%Y")
+
 try:
     df = pd.read_csv(CSV_FILE)
     existing = set(zip(df['Date'], df['Market']))
@@ -95,52 +103,54 @@ if new_rows:
 df['Date'] = pd.to_datetime(df['Date'], dayfirst=True, errors='coerce')
 df = df.dropna(subset=['Date', 'Jodi', 'Open', 'Close'])
 
-today = datetime.today().strftime("%d/%m/%Y")
 predictions = []
-past_errors = pd.read_csv(LEARNING_LOG) if os.path.exists(LEARNING_LOG) else pd.DataFrame(columns=['Date', 'Market', 'Type', 'Wrong'])
+pred_date = get_next_prediction_date()
 
 for market in df['Market'].unique():
-    mdf = df[df['Market'] == market].sort_values('Date').dropna().tail(60)
+    mdf = df[df['Market'] == market].sort_values('Date')
+    mdf = mdf.tail(60)
 
-    open_digits = mdf['Jodi'].astype(str).str.zfill(2).str[0].astype(int)
-    open_weights = Counter(open_digits)
-    close_digits = mdf['Jodi'].astype(str).str.zfill(2).str[1].astype(int)
-    close_weights = Counter(close_digits)
+    if len(mdf) < 10:
+        continue
 
-    # Self-adjusting weights
-    for _, row in past_errors[(past_errors['Market'] == market)].iterrows():
-        if row['Type'] == 'Open' and row['Wrong'] in open_weights:
-            open_weights[row['Wrong']] -= 1
-        if row['Type'] == 'Close' and row['Wrong'] in close_weights:
-            close_weights[row['Wrong']] -= 1
-
-    open_common = [str(d) for d, _ in open_weights.most_common(2)]
-    close_common = [str(d) for d, _ in close_weights.most_common(2)]
-
+    # ML model input preparation
     jodis = mdf['Jodi'].astype(str).str.zfill(2)
+    open_digits = jodis.str[0].astype(int)
+    close_digits = jodis.str[1].astype(int)
+
+    open_common = [str(d) for d, _ in Counter(open_digits).most_common(2)]
+    close_common = [str(d) for d, _ in Counter(close_digits).most_common(2)]
     jodi_common = [j for j, _ in Counter(jodis).most_common(10)]
 
-    pattis = [o + j[0] + c for o, j, c in zip(mdf['Open'].astype(str), mdf['Jodi'].astype(str).str.zfill(2), mdf['Close'].astype(str)) if len(o)==1 and len(c)==1]
-    patti_common = [p for p in pattis if len(p)==3][:4]
+    pattis = [o + j[0] + c for o, j, c in zip(mdf['Open'].astype(str), jodis, mdf['Close'].astype(str)) if o.isdigit() and c.isdigit()]
+    patti_common = [p for p in pattis if len(p) == 3 or len(p) == 4][-4:]
 
-    message = f"""*{market.upper()}*
-*Open :* {', '.join(open_common)}
-*Close :* {', '.join(close_common)}
-*Jodi :* {', '.join(jodi_common)}
-*Patti :* {', '.join(patti_common)}"""
-    predictions.append(message)
-    send_telegram_message(message)
+    prediction = f"""
+<b>{market.upper()}</b>
+<b>{pred_date}</b>
+<b>Open:</b> {', '.join(open_common)}
+<b>Close:</b> {', '.join(close_common)}
+<b>Jodi:</b> {', '.join(jodi_common)}
+<b>Patti:</b> {', '.join(patti_common)}"""
 
-    # Log predictions (actual comparison can be added next day)
-    for val in open_common:
-        past_errors.loc[len(past_errors)] = [today, market, 'Open', val]
-    for val in close_common:
-        past_errors.loc[len(past_errors)] = [today, market, 'Close', val]
+    predictions.append(prediction)
+    send_telegram_message(prediction)
 
-past_errors.to_csv(LEARNING_LOG, index=False)
+    # Log prediction
+    log_data = pd.DataFrame([{
+        'Date': pred_date,
+        'Market': market,
+        'Open': ','.join(open_common),
+        'Close': ','.join(close_common),
+        'Jodi': ','.join(jodi_common),
+        'Patti': ','.join(patti_common),
+        'Matched': ''
+    }])
+    if os.path.exists(LOG_FILE):
+        log_df = pd.read_csv(LOG_FILE)
+        log_df = pd.concat([log_df, log_data], ignore_index=True)
+    else:
+        log_df = log_data
+    log_df.to_csv(LOG_FILE, index=False)
 
-with open("daily_prediction.txt", "w") as f:
-    f.write("\n\n".join(predictions))
-
-print("Prediction complete and saved.")
-    
+print("Predictions sent.")
