@@ -9,11 +9,12 @@ import numpy as np
 import sys
 import os
 
-# Telegram settings
+# Telegram config
 TOKEN = "7121966371:AAEKHVrsqLRswXg64-6Nf3nid-Mbmlmmw5M"
 CHAT_ID = "7621883960"
 bot = Bot(token=TOKEN)
 
+# Market URLs
 MARKET_URLS = {
     "Time Bazar": "https://dpbossattamatka.com/panel-chart-record/time-bazar.php",
     "Milan Day": "https://dpbossattamatka.com/panel-chart-record/milan-day.php",
@@ -28,11 +29,16 @@ CSV_PATH = "enhanced_satta_data.csv"
 TODAY = datetime.now().strftime("%Y-%m-%d")
 TOMORROW = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
 
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+}
+
 def scrape_market(url):
     try:
-        res = requests.get(url, timeout=10)
+        res = requests.get(url, headers=HEADERS, timeout=10)
         soup = BeautifulSoup(res.text, "html.parser")
-        rows = soup.find_all("tr")[1:]
+        rows = soup.select("table tr")[1:]  # skip header
+        print(f"[DEBUG] {url} - rows found: {len(rows)}")
         data = []
         for row in rows:
             cols = row.find_all("td")
@@ -45,7 +51,7 @@ def scrape_market(url):
                 data.append([date, open_, jodi, close, patti])
         return data
     except Exception as e:
-        print(f"Error scraping {url}: {e}")
+        print(f"[ERROR] Scraping {url}: {e}")
         return []
 
 def update_data():
