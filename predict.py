@@ -1,121 +1,146 @@
+import os
+import requests
+from bs4 import BeautifulSoup
 import pandas as pd
 import numpy as np
-import datetime
-import logging
-import joblib
-from sklearn.preprocessing import StandardScaler
-from sklearn.neural_network import MLPClassifier
-from tensorflow.keras.models import Sequential, load_model
-from tensorflow.keras.layers import Dense
-from tensorflow.keras.utils import to_categorical
-import telegram
+from datetime import datetime, timedelta
+from sklearn.ensemble import RandomForestClassifier
+from collections import Counter
 
-# Telegram bot setup
-TELEGRAM_TOKEN = "7121966371:AAEKHVrsqLRswXg64-6Nf3nid-Mbmlmmw5M"
-TELEGRAM_CHAT_ID = "7621883960"
-bot = telegram.Bot(token=TELEGRAM_TOKEN)
+TELEGRAM_BOT_TOKEN = "7121966371:AAEKHVrsqLRswXg64-6Nf3nid-Mbmlmmw5M"
+CHAT_ID = "7621883960"
+CSV_FILE = "satta_data.csv"
+LEARNING_LOG = "prediction_log.csv"
+HEADERS = {"User-Agent": "Mozilla/5.0"}
 
-def send_telegram_message(text):
+MARKETS = {
+    "Time Bazar": "https://dpbossattamatka.com/panel-chart-record/time-bazar.php",
+    "Milan Day": "https://dpbossattamatka.com/panel-chart-record/milan-day.php",
+    "Rajdhani Day": "https://dpbossattamatka.com/panel-chart-record/rajdhani-day.php",
+    "Kalyan": "https://dpbossattamatka.com/panel-chart-record/kalyan.php",
+    "Milan Night": "https://dpbossattamatka.com/panel-chart-record/milan-night.php",
+    "Rajdhani Night": "https://dpbossattamatka.com/panel-chart-record/rajdhani-night.php",
+    "Main Bazar": "https://dpbossattamatka.com/panel-chart-record/main-bazar.php"
+}
+
+def send_telegram_message(msg):
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {"chat_id": CHAT_ID, "text": msg, "parse_mode": "Markdown"}
     try:
-        bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=text)
+        requests.post(url, data=payload)
     except Exception as e:
-        logging.error(f"Telegram message send failed: {e}")
+        print("Telegram error:", e)
 
-def load_data(file_path, market=None):
-    df = pd.read_csv(file_path)
-    if market:
-        df = df[df['Market'] == market]
-    return df
+def parse_cell(cell):
+    parts = cell.decode_contents().split('<br>')
+    return ''.join(BeautifulSoup(p, 'html.parser').get_text(strip=True) for p in parts)
 
-def prepare_features(df):
-    # Example features: Use relevant columns from your CSV for prediction
-    # Adjust these feature columns based on your actual CSV structure
-    feature_cols = ['Open', 'Close', 'open_sum', 'close_sum', 'prev_jodi_distance']
-    df = df.dropna(subset=feature_cols + ['Jodi'])
-    X = df[feature_cols].values
-    y = df['Jodi'].values
-    return X, y
+def parse_table(url):
+    results = []
+    try:
+        res = requests.get(url, headers=HEADERS, timeout=10)
+        res.encoding = 'utf-8'
+        soup = BeautifulSoup(res.text, 'html.parser')
+        for table in soup.find_all("table"):
+            rows = table.find_all("tr")
+            for row in rows:
+                cols = row.find_all("td")
+                if len(cols) >= 4 and 'to' in cols[0].text:
+                    try:
+                        base_date = datetime.strptime(cols[0].text.split("to")[0].strip(), "%d/%m/%Y")
+                    except:
+                        continue
+                    cells = cols[1:]
+                    total_days = len(cells) // 3
+                    for i in range(total_days):
+                        date = (base_date + timedelta(days=i)).strftime("%d/%m/%Y")
+                        o, j, c = cells[i*3:i*3+3]
+                        if '**' in o.text or '**' in j.text or '**' in c.text:
+                            continue
+                        results.append({
+                            'Date': date,
+                            'Open': parse_cell(o),
+                            'Jodi': parse_cell(j),
+                            'Close': parse_cell(c)
+                        })
+        return results
+    except Exception as e:
+        print(f"Error fetching {url}: {e}")
+        return []
 
-def train_and_save_models(X, y, market):
-    logging.info(f"Training models for market {market}...")
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
-    joblib.dump(scaler, f"scaler_{market}.pkl")
+try:
+    df = pd.read_csv(CSV_FILE)
+    existing = set(zip(df['Date'], df['Market']))
+except:
+    df = pd.DataFrame(columns=['Date', 'Market', 'Open', 'Jodi', 'Close'])
+    existing = set()
 
-    mlp = MLPClassifier(hidden_layer_sizes=(100,), max_iter=500, random_state=42)
-    mlp.fit(X_scaled, y)
-    joblib.dump(mlp, f"{market}_mlp_model.pkl")
+new_rows = []
+for market, url in MARKETS.items():
+    records = parse_table(url)
+    for record in records:
+        if (record['Date'], market) not in existing:
+            new_rows.append({
+                'Date': record['Date'],
+                'Market': market,
+                'Open': record['Open'],
+                'Jodi': record['Jodi'],
+                'Close': record['Close']
+            })
 
-    num_classes = len(np.unique(y))
-    model = Sequential([
-        Dense(64, input_dim=X.shape[1], activation='relu'),
-        Dense(32, activation='relu'),
-        Dense(num_classes, activation='softmax')
-    ])
-    model.compile(loss='sparse_categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
-    model.fit(X_scaled, y, epochs=20, batch_size=16, verbose=0)
-    model.save(f"{market}_model.h5")
-    logging.info(f"Models saved for market {market}")
+if new_rows:
+    df = pd.concat([df, pd.DataFrame(new_rows)], ignore_index=True)
+    df.to_csv(CSV_FILE, index=False)
 
-def load_models(market):
-    scaler = joblib.load(f"scaler_{market}.pkl")
-    mlp = joblib.load(f"{market}_mlp_model.pkl")
-    keras_model = load_model(f"{market}_model.h5")
-    return scaler, mlp, keras_model
+df['Date'] = pd.to_datetime(df['Date'], dayfirst=True, errors='coerce')
+df = df.dropna(subset=['Date', 'Jodi', 'Open', 'Close'])
 
-def predict_next_day(df, scaler, mlp, keras_model):
-    # Use last row features to predict next day
-    feature_cols = ['Open', 'Close', 'open_sum', 'close_sum', 'prev_jodi_distance']
-    last_row = df.dropna(subset=feature_cols).iloc[-1]
-    X_pred = last_row[feature_cols].values.reshape(1, -1)
-    X_scaled = scaler.transform(X_pred)
+today = datetime.today().strftime("%d/%m/%Y")
+predictions = []
+past_errors = pd.read_csv(LEARNING_LOG) if os.path.exists(LEARNING_LOG) else pd.DataFrame(columns=['Date', 'Market', 'Type', 'Wrong'])
 
-    # sklearn MLP prediction
-    proba = mlp.predict_proba(X_scaled)[0]
-    top_indices = np.argsort(proba)[::-1][:10]
-    predicted_jodis = mlp.classes_[top_indices]
+for market in df['Market'].unique():
+    mdf = df[df['Market'] == market].sort_values('Date').dropna().tail(60)
 
-    # keras model prediction (optional, can be combined or compared)
-    keras_proba = keras_model.predict(X_scaled)
-    keras_top_indices = keras_proba[0].argsort()[::-1][:10]
-    keras_predicted_jodis = keras_top_indices  # these are class indices
+    open_digits = mdf['Jodi'].astype(str).str.zfill(2).str[0].astype(int)
+    open_weights = Counter(open_digits)
+    close_digits = mdf['Jodi'].astype(str).str.zfill(2).str[1].astype(int)
+    close_weights = Counter(close_digits)
 
-    return predicted_jodis, proba[top_indices], keras_predicted_jodis
+    # Self-adjusting weights
+    for _, row in past_errors[(past_errors['Market'] == market)].iterrows():
+        if row['Type'] == 'Open' and row['Wrong'] in open_weights:
+            open_weights[row['Wrong']] -= 1
+        if row['Type'] == 'Close' and row['Wrong'] in close_weights:
+            close_weights[row['Wrong']] -= 1
 
-def main():
-    logging.basicConfig(level=logging.INFO)
+    open_common = [str(d) for d, _ in open_weights.most_common(2)]
+    close_common = [str(d) for d, _ in close_weights.most_common(2)]
 
-    data_file = "enhanced_satta_data.csv"
-    markets = ['Kalyan', 'Main Bazar', 'Milan', 'Rajdhani', 'Time Bazar']
+    jodis = mdf['Jodi'].astype(str).str.zfill(2)
+    jodi_common = [j for j, _ in Counter(jodis).most_common(10)]
 
-    for market in markets:
-        logging.info(f"Processing market: {market}")
-        df = load_data(data_file, market)
-        if df.empty:
-            logging.warning(f"No data for market {market}, skipping.")
-            continue
+    pattis = [o + j[0] + c for o, j, c in zip(mdf['Open'].astype(str), mdf['Jodi'].astype(str).str.zfill(2), mdf['Close'].astype(str)) if len(o)==1 and len(c)==1]
+    patti_common = [p for p in pattis if len(p)==3][:4]
 
-        X, y = prepare_features(df)
-        if len(X) == 0:
-            logging.warning(f"No valid feature rows for market {market}, skipping.")
-            continue
+    message = f"""*{market.upper()}*
+*Open :* {', '.join(open_common)}
+*Close :* {', '.join(close_common)}
+*Jodi :* {', '.join(jodi_common)}
+*Patti :* {', '.join(patti_common)}"""
+    predictions.append(message)
+    send_telegram_message(message)
 
-        import os
-        scaler_file = f"scaler_{market}.pkl"
-        mlp_file = f"{market}_mlp_model.pkl"
-        keras_file = f"{market}_model.h5"
+    # Log predictions (actual comparison can be added next day)
+    for val in open_common:
+        past_errors.loc[len(past_errors)] = [today, market, 'Open', val]
+    for val in close_common:
+        past_errors.loc[len(past_errors)] = [today, market, 'Close', val]
 
-        if not (os.path.exists(scaler_file) and os.path.exists(mlp_file) and os.path.exists(keras_file)):
-            logging.info(f"Model files missing for {market}, training new models.")
-            train_and_save_models(X, y, market)
+past_errors.to_csv(LEARNING_LOG, index=False)
 
-        scaler, mlp, keras_model = load_models(market)
-        predicted_jodis, proba, keras_predicted_jodis = predict_next_day(df, scaler, mlp, keras_model)
+with open("daily_prediction.txt", "w") as f:
+    f.write("\n\n".join(predictions))
 
-        today_str = datetime.date.today().strftime("%d-%m-%Y")
-        message = f"Market: {market}\nDate: {today_str}\nTop 10 Predicted Jodis:\n" + ", ".join(map(str, predicted_jodis))
-        send_telegram_message(message)
-        logging.info(f"Telegram message sent for {market}")
-
-if __name__ == "__main__":
-    main()
+print("Prediction complete and saved.")
+    
