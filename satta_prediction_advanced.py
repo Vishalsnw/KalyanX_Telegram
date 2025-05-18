@@ -16,8 +16,8 @@ import telegram
 CSV_FILE = "enhanced_satta_data.csv"
 ACCURACY_LOG = "accuracy_log.csv"
 MARKETS = ["Time Bazar", "Milan Day", "Rajdhani Day", "Kalyan", "Milan Night", "Rajdhani Night", "Main Bazar"]
-TELEGRAM_TOKEN = "7121966371:AAEKHVrsqLRswXg64-6Nf3nid-Mbmlmmw5M"
-CHAT_ID = "7621883960"
+TELEGRAM_TOKEN = "YOUR_TELEGRAM_TOKEN"
+CHAT_ID = "YOUR_CHAT_ID"
 TODAY = datetime.now().strftime("%d/%m/%Y")
 
 def send_telegram_message(message):
