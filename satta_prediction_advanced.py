@@ -27,6 +27,11 @@ def load_data():
     df["Market"] = df["Market"].astype(str).str.strip()
     df["Open"] = pd.to_numeric(df["Open"], errors="coerce")
     df["Close"] = pd.to_numeric(df["Close"], errors="coerce")
+    df = df.dropna(subset=["Open", "Close"])
+
+    print("Loaded rows after cleaning:", len(df))
+    print("Last date in data:", df["Date"].max())
+    print("Market counts:\n", df["Market"].value_counts())
     return df
 
 def engineer_features(df_market):
@@ -43,15 +48,22 @@ def generate_jodis(open_vals, close_vals):
 def generate_pattis(open_vals, close_vals):
     pattis = set()
     for val in open_vals + close_vals:
-        base = int(val)
-        pattis.update([str(base + i).zfill(3) for i in range(4)])
+        try:
+            base = int(val)
+            pattis.update([str(base + i).zfill(3) for i in range(4)])
+        except:
+            continue
     return list(pattis)[:4]
 
 def train_and_predict(df, market):
     df_market = df[df["Market"] == market].copy()
-    df_market = engineer_features(df_market)
 
+    print(f"\n--- {market} ---")
+    print("Data points available:", len(df_market))
+
+    df_market = engineer_features(df_market)
     if len(df_market) < 20:
+        print("Not enough data after feature engineering.")
         return None, None
 
     tomorrow = df_market["Date"].max() + timedelta(days=1)
@@ -87,6 +99,9 @@ def train_and_predict(df, market):
         open_vals = [open_classes[i] for i in np.argsort(open_probs)[-2:][::-1]]
         close_vals = [close_classes[i] for i in np.argsort(close_probs)[-2:][::-1]]
 
+        print("Predicted Open:", open_vals)
+        print("Predicted Close:", close_vals)
+
         return open_vals, close_vals
     except Exception as e:
         print(f"{market} prediction error: {e}")
@@ -115,6 +130,7 @@ def main():
             f"<b>Patti:</b> {', '.join(pattis)}\n"
         )
 
+    print("\n=== Telegram Message ===\n")
     print(full_message)
     send_telegram_message(full_message)
 
