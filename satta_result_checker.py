@@ -102,6 +102,7 @@ for market, url in MARKETS.items():
 
 if not all_new_data:
     print("No new results to update.")
+    enriched_df = pd.DataFrame()
 else:
     print(f"Adding {len(all_new_data)} new rows to CSV.")
     new_df = pd.DataFrame(all_new_data)
@@ -111,58 +112,60 @@ else:
     final_df.to_csv(CSV_FILE, index=False)
     print("Updated enhanced_satta_data.csv")
 
-# Step 3: Accuracy check for today
+# Step 3: Accuracy check for today (only if prediction file exists)
 today_str = datetime.today().strftime("%d/%m/%Y")
 today_actuals = enriched_df[enriched_df['Date'] == today_str] if not enriched_df.empty else pd.DataFrame()
 
-try:
-    pred_df = pd.read_csv(PRED_FILE)
-except:
-    print("Prediction file not found.")
-    exit()
-
-matched = []
-
-for _, row in pred_df.iterrows():
-    market = row['Market']
-    pred_jodi = str(row['Jodi']).zfill(2)
-    actual = today_actuals[today_actuals['Market'] == market]
-    if actual.empty:
-        continue
-    actual_row = actual.iloc[0]
-    open_match = row['Open'] == actual_row['Open']
-    close_match = row['Close'] == actual_row['Close']
-    jodi_match = pred_jodi == str(actual_row['Jodi']).zfill(2)
-    patti_match = any(p in row['Patti'] for p in [actual_row['Open'] + actual_row['Jodi'][0] + actual_row['Close']])
-    matched.append({
-        "Market": market,
-        "Date": today_str,
-        "Open_Pred": row['Open'],
-        "Open_Act": actual_row['Open'],
-        "Close_Pred": row['Close'],
-        "Close_Act": actual_row['Close'],
-        "Jodi_Pred": pred_jodi,
-        "Jodi_Act": actual_row['Jodi'],
-        "Open_Match": open_match,
-        "Close_Match": close_match,
-        "Jodi_Match": jodi_match,
-        "Patti_Match": patti_match,
-        "Model": row['Model']
-    })
-
-log_df = pd.DataFrame(matched)
-log_df.to_csv(ACCURACY_LOG, mode='a', header=not os.path.exists(ACCURACY_LOG), index=False)
-
-# Telegram summary
-if not log_df.empty:
-    summary = "\n\n".join(
-        f"<b>{row['Market']}</b>\n<b>Open:</b> {row['Open_Pred']} vs {row['Open_Act']} ({'✔' if row['Open_Match'] else '✘'})\n"
-        f"<b>Close:</b> {row['Close_Pred']} vs {row['Close_Act']} ({'✔' if row['Close_Match'] else '✘'})\n"
-        f"<b>Jodi:</b> {row['Jodi_Pred']} vs {row['Jodi_Act']} ({'✔' if row['Jodi_Match'] else '✘'})\n"
-        f"<b>Patti Match:</b> {'✔' if row['Patti_Match'] else '✘'}"
-        for _, row in log_df.iterrows()
-    )
-    send_telegram_message("<b>Today's Prediction Accuracy:</b>\n\n" + summary)
-    print("Telegram summary sent.")
+if not os.path.exists(PRED_FILE):
+    print("Prediction file not found. Skipping accuracy check.")
 else:
-    print("No match data to report.")
+    try:
+        pred_df = pd.read_csv(PRED_FILE)
+    except Exception as e:
+        print("Error reading prediction file:", e)
+        pred_df = pd.DataFrame()
+
+    matched = []
+
+    for _, row in pred_df.iterrows():
+        market = row['Market']
+        pred_jodi = str(row['Jodi']).zfill(2)
+        actual = today_actuals[today_actuals['Market'] == market]
+        if actual.empty:
+            continue
+        actual_row = actual.iloc[0]
+        open_match = row['Open'] == actual_row['Open']
+        close_match = row['Close'] == actual_row['Close']
+        jodi_match = pred_jodi == str(actual_row['Jodi']).zfill(2)
+        patti_match = any(p in row['Patti'] for p in [actual_row['Open'] + actual_row['Jodi'][0] + actual_row['Close']])
+        matched.append({
+            "Market": market,
+            "Date": today_str,
+            "Open_Pred": row['Open'],
+            "Open_Act": actual_row['Open'],
+            "Close_Pred": row['Close'],
+            "Close_Act": actual_row['Close'],
+            "Jodi_Pred": pred_jodi,
+            "Jodi_Act": actual_row['Jodi'],
+            "Open_Match": open_match,
+            "Close_Match": close_match,
+            "Jodi_Match": jodi_match,
+            "Patti_Match": patti_match,
+            "Model": row['Model']
+        })
+
+    if matched:
+        log_df = pd.DataFrame(matched)
+        log_df.to_csv(ACCURACY_LOG, mode='a', header=not os.path.exists(ACCURACY_LOG), index=False)
+
+        summary = "\n\n".join(
+            f"<b>{row['Market']}</b>\n<b>Open:</b> {row['Open_Pred']} vs {row['Open_Act']} ({'✔' if row['Open_Match'] else '✘'})\n"
+            f"<b>Close:</b> {row['Close_Pred']} vs {row['Close_Act']} ({'✔' if row['Close_Match'] else '✘'})\n"
+            f"<b>Jodi:</b> {row['Jodi_Pred']} vs {row['Jodi_Act']} ({'✔' if row['Jodi_Match'] else '✘'})\n"
+            f"<b>Patti Match:</b> {'✔' if row['Patti_Match'] else '✘'}"
+            for _, row in log_df.iterrows()
+        )
+        send_telegram_message("<b>Today's Prediction Accuracy:</b>\n\n" + summary)
+        print("Telegram summary sent.")
+    else:
+        print("No matched prediction data to report.")
