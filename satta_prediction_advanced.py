@@ -68,11 +68,23 @@ def build_lstm_model(input_shape, output_classes):
 
 # Train All 3 Models
 def train_models(df, target_col):
-    X = df[["OpenDigit", "CloseDigit", "Weekday"]]
-    y_raw = df[target_col].astype(str)
+    df = df[df[target_col].notna()]
+    df = df[df[target_col].astype(str).str.match(r"^\d{1,3}$")]
+
+    if len(df) < 10:
+        raise ValueError(f"Not enough valid data to train for {target_col}")
+
+    X = df[["OpenDigit", "CloseDigit", "Weekday"]].reset_index(drop=True)
+    y_raw = df[target_col].astype(str).reset_index(drop=True)
+
+    if len(X) != len(y_raw):
+        raise ValueError(f"Feature and target length mismatch for {target_col}")
 
     le = LabelEncoder()
-    y = le.fit_transform(y_raw)
+    try:
+        y = le.fit_transform(y_raw)
+    except Exception as e:
+        raise ValueError(f"Label encoding failed for {target_col}: {e}")
 
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
@@ -86,7 +98,7 @@ def train_models(df, target_col):
     X_scaled = scaler.fit_transform(X)
 
     if len(X_scaled) < 4:
-        raise Exception("Not enough data for LSTM.")
+        raise Exception(f"Not enough data for LSTM training on {target_col}")
 
     generator = TimeseriesGenerator(X_scaled, y, length=3, batch_size=1)
     lstm = build_lstm_model((3, X.shape[1]), len(np.unique(y)))
