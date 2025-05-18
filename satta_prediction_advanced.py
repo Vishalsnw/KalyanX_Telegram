@@ -75,8 +75,7 @@ def append_actual_results_if_any():
     df_pred["Date"] = pd.to_datetime(df_pred["Date"])
     latest_date = pd.to_datetime(df["Date"].max(), dayfirst=True) if not df.empty else pd.to_datetime("2000-01-01")
 
-    new_results = df_pred[df_pred["Posted"] == "Yes"]
-    new_results = new_results[new_results["Date"] > latest_date]
+    new_results = df_pred[(df_pred["Posted"] == "Yes") & (df_pred["Date"] > latest_date)]
 
     if not new_results.empty:
         new_rows = []
@@ -101,6 +100,7 @@ def append_actual_results_if_any():
 # Preprocess for model training
 def preprocess_features(df, market):
     df_market = df[df["Market"] == market].copy()
+    if df_market.empty: return None
     df_market["Jodi"] = df_market["Jodi"].astype(str).str.zfill(2)
     df_market["OpenDigit"] = df_market["Jodi"].str[0].astype(int)
     df_market["CloseDigit"] = df_market["Jodi"].str[1].astype(int)
@@ -120,10 +120,16 @@ def build_lstm_model(input_shape, output_classes):
 # Train Models
 def train_models(df, target_col):
     X = df[["OpenDigit", "CloseDigit", "Weekday"]]
-    y_raw = df[target_col].astype(str).str.zfill(2) if target_col == "Jodi" else df[target_col].astype(str)
+    if target_col == "Jodi":
+        y_raw = df[target_col].astype(str).str.zfill(2)
+    else:
+        y_raw = df[target_col].astype(str)
 
     le = LabelEncoder()
     y = le.fit_transform(y_raw)
+
+    if len(np.unique(y)) < 2:
+        raise ValueError("Insufficient class diversity for training.")
 
     X_train, _, y_train, _ = train_test_split(X, y, test_size=0.2, random_state=42)
 
@@ -161,13 +167,14 @@ def ensemble_predict(models, scaler, le, X_input):
 # Predict for Market
 def predict_for_market(df, market):
     df_market = preprocess_features(df, market)
-    if df_market is None or len(df_market) < 10:
+    if df_market is None or len(df_market) < 20:
+        print(f"Not enough data for market {market}")
         return None
 
     latest_row = df_market.iloc[-1]
-    features = [[latest_row["OpenDigit"], latest_row["CloseDigit"], latest_row["Weekday"]]]
-
+    features = [latest_row["OpenDigit"], latest_row["CloseDigit"], latest_row["Weekday"]]
     predictions = {}
+
     for col in ["Open", "Close", "Jodi", "Patti"]:
         try:
             rf, xgb, lstm, scaler, le = train_models(df_market, col)
@@ -212,6 +219,6 @@ def main():
             df_pred = pd.concat([old, df_pred]).drop_duplicates(subset=["Date", "Market"], keep="last")
         df_pred.to_csv("predictions.csv", index=False)
 
-# Main block
+# Run
 if __name__ == "__main__":
     main()
