@@ -26,6 +26,27 @@ def send_telegram_message(message):
     except Exception as e:
         print(f"Telegram error: {e}")
 
+# Ensure required files exist
+def ensure_files():
+    if not os.path.exists("enhanced_satta_data.csv"):
+        print("Creating placeholder enhanced_satta_data.csv")
+        df = pd.DataFrame(columns=[
+            "Date", "Market", "Open", "Jodi", "Close", "day_of_week", "is_weekend",
+            "open_sum", "close_sum", "mirror_open", "mirror_close",
+            "reverse_jodi", "is_holiday", "prev_jodi_distance"
+        ])
+        df.to_csv("enhanced_satta_data.csv", index=False)
+
+    if not os.path.exists("predictions.csv"):
+        print("Creating predictions.csv")
+        df = pd.DataFrame(columns=["Date", "Market", "Open", "Close", "Jodi", "Patti", "Posted"])
+        df.to_csv("predictions.csv", index=False)
+
+    if not os.path.exists("accuracy_log.csv"):
+        print("Creating accuracy_log.csv")
+        df = pd.DataFrame(columns=["Date", "Market", "Open_Acc", "Close_Acc", "Jodi_Acc", "Patti_Acc"])
+        df.to_csv("accuracy_log.csv", index=False)
+
 # Data Load
 def load_data():
     df = pd.read_csv("enhanced_satta_data.csv")
@@ -54,7 +75,7 @@ def preprocess_features(df, market):
 
     return df_market.dropna()
 
-# Build LSTM Model (Simplified)
+# Build LSTM Model
 def build_lstm_model(input_shape, output_classes):
     model = Sequential()
     model.add(LSTM(64, input_shape=input_shape, return_sequences=False))
@@ -82,14 +103,13 @@ def train_models(df, target_col):
     scaler = MinMaxScaler()
     X_scaled = scaler.fit_transform(X_train)
 
-    # LSTM input needs reshaping
     X_lstm = X_scaled.reshape((X_scaled.shape[0], 1, X_scaled.shape[1]))
     lstm = build_lstm_model((1, X.shape[1]), len(np.unique(y)))
     lstm.fit(X_lstm, y_train, epochs=10, verbose=0)
 
     return rf, xgb, lstm, scaler, le
 
-# Ensemble Logic
+# Ensemble Prediction
 def ensemble_predict(models, scaler, le, X_input):
     rf, xgb, lstm = models
     X_input = np.array(X_input).reshape(1, -1)
@@ -106,7 +126,7 @@ def ensemble_predict(models, scaler, le, X_input):
     final_encoded = max(set(preds), key=preds.count)
     return le.inverse_transform([final_encoded])[0]
 
-# Prediction for a Single Market
+# Market Prediction
 def predict_for_market(df, market):
     df_market = preprocess_features(df, market)
     if df_market is None or len(df_market) < 10:
@@ -152,8 +172,9 @@ def log_accuracy(df_actual, df_pred):
         df_log = pd.concat([old, df_log]).drop_duplicates(subset=["Date", "Market"], keep="last")
     df_log.to_csv("accuracy_log.csv", index=False)
 
-# Main Function
+# Main
 def main():
+    ensure_files()
     df = load_data()
     today = datetime.now().strftime("%Y-%m-%d")
     markets = df["Market"].unique()
