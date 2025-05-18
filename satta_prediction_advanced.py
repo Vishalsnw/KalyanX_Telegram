@@ -12,7 +12,7 @@ TELEGRAM_TOKEN = "7121966371:AAEKHVrsqLRswXg64-6Nf3nid-Mbmlmmw5M"
 CHAT_ID = "7621883960"
 
 MARKETS = [
-    "Time Bazar", "Milan Day", "Rajdhani Day", 
+    "Time Bazar", "Milan Day", "Rajdhani Day",
     "Kalyan", "Milan Night", "Rajdhani Night", "Main Bazar"
 ]
 
@@ -115,6 +115,7 @@ def main():
             f"<b>Patti:</b> {', '.join(pattis)}\n"
         )
 
+    print(full_message)
     send_telegram_message(full_message)
 
 if __name__ == "__main__":
