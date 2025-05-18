@@ -61,7 +61,7 @@ def add_features(df):
     df['mirror_open'] = df['Open'].astype(str).str.zfill(3).apply(lambda x: ''.join(str((10 - int(d)) % 10) for d in x))
     df['mirror_close'] = df['Close'].astype(str).str.zfill(3).apply(lambda x: ''.join(str((10 - int(d)) % 10) for d in x))
     df['reverse_jodi'] = df['Jodi'].astype(str).str.zfill(2).apply(lambda x: x[::-1])
-    df['is_holiday'] = 0  # Optional: set actual holidays
+    df['is_holiday'] = 0
     df['prev_jodi_distance'] = df['Jodi'].astype(str).str.zfill(2).astype(int).diff().fillna(0).abs()
     return df
 
@@ -73,9 +73,8 @@ def append_actual_results_if_any():
     df = pd.read_csv("enhanced_satta_data.csv")
     df_pred = pd.read_csv("predictions.csv")
     df_pred["Date"] = pd.to_datetime(df_pred["Date"])
-    latest_date = df["Date"].max() if not df.empty else pd.to_datetime("2000-01-01")
+    latest_date = pd.to_datetime(df["Date"].max(), dayfirst=True) if not df.empty else pd.to_datetime("2000-01-01")
 
-    # Filter new results that are not yet in main data
     new_results = df_pred[df_pred["Posted"] == "Yes"]
     new_results = new_results[new_results["Date"] > latest_date]
 
@@ -213,5 +212,6 @@ def main():
             df_pred = pd.concat([old, df_pred]).drop_duplicates(subset=["Date", "Market"], keep="last")
         df_pred.to_csv("predictions.csv", index=False)
 
+# Main block
 if __name__ == "__main__":
     main()
