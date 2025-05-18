@@ -26,7 +26,7 @@ def send_telegram_message(message):
     except Exception as e:
         print(f"Telegram error: {e}")
 
-# Ensure required files exist
+# File Setup
 def ensure_files():
     if not os.path.exists("enhanced_satta_data.csv"):
         print("Creating placeholder enhanced_satta_data.csv")
@@ -38,16 +38,14 @@ def ensure_files():
         df.to_csv("enhanced_satta_data.csv", index=False)
 
     if not os.path.exists("predictions.csv"):
-        print("Creating predictions.csv")
         df = pd.DataFrame(columns=["Date", "Market", "Open", "Close", "Jodi", "Patti", "Posted"])
         df.to_csv("predictions.csv", index=False)
 
     if not os.path.exists("accuracy_log.csv"):
-        print("Creating accuracy_log.csv")
         df = pd.DataFrame(columns=["Date", "Market", "Open_Acc", "Close_Acc", "Jodi_Acc", "Patti_Acc"])
         df.to_csv("accuracy_log.csv", index=False)
 
-# Data Load
+# Load Dataset
 def load_data():
     df = pd.read_csv("enhanced_satta_data.csv")
     df.dropna(inplace=True)
@@ -75,7 +73,7 @@ def preprocess_features(df, market):
 
     return df_market.dropna()
 
-# Build LSTM Model
+# LSTM Model
 def build_lstm_model(input_shape, output_classes):
     model = Sequential()
     model.add(LSTM(64, input_shape=input_shape, return_sequences=False))
@@ -84,7 +82,7 @@ def build_lstm_model(input_shape, output_classes):
     model.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=['accuracy'])
     return model
 
-# Train All 3 Models
+# Train Models
 def train_models(df, target_col):
     X = df[["OpenDigit", "CloseDigit", "Weekday"]]
     y_raw = df[target_col].astype(str).str.zfill(2) if target_col == "Jodi" else df[target_col].astype(str)
@@ -126,7 +124,7 @@ def ensemble_predict(models, scaler, le, X_input):
     final_encoded = max(set(preds), key=preds.count)
     return le.inverse_transform([final_encoded])[0]
 
-# Market Prediction
+# Prediction per Market
 def predict_for_market(df, market):
     df_market = preprocess_features(df, market)
     if df_market is None or len(df_market) < 10:
@@ -172,7 +170,7 @@ def log_accuracy(df_actual, df_pred):
         df_log = pd.concat([old, df_log]).drop_duplicates(subset=["Date", "Market"], keep="last")
     df_log.to_csv("accuracy_log.csv", index=False)
 
-# Main
+# Main Execution
 def main():
     ensure_files()
     df = load_data()
