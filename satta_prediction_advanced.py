@@ -68,23 +68,11 @@ def build_lstm_model(input_shape, output_classes):
 
 # Train All 3 Models
 def train_models(df, target_col):
-    df = df[df[target_col].notna()]
-    df = df[df[target_col].astype(str).str.match(r"^\d{1,3}$")]
-
-    if len(df) < 10:
-        raise ValueError(f"Not enough valid data to train for {target_col}")
-
-    X = df[["OpenDigit", "CloseDigit", "Weekday"]].reset_index(drop=True)
-    y_raw = df[target_col].astype(str).reset_index(drop=True)
-
-    if len(X) != len(y_raw):
-        raise ValueError(f"Feature and target length mismatch for {target_col}")
+    X = df[["OpenDigit", "CloseDigit", "Weekday"]]
+    y_raw = df[target_col].astype(str)
 
     le = LabelEncoder()
-    try:
-        y = le.fit_transform(y_raw)
-    except Exception as e:
-        raise ValueError(f"Label encoding failed for {target_col}: {e}")
+    y = le.fit_transform(y_raw)
 
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
@@ -97,9 +85,6 @@ def train_models(df, target_col):
     scaler = MinMaxScaler()
     X_scaled = scaler.fit_transform(X)
 
-    if len(X_scaled) < 4:
-        raise Exception(f"Not enough data for LSTM training on {target_col}")
-
     generator = TimeseriesGenerator(X_scaled, y, length=3, batch_size=1)
     lstm = build_lstm_model((3, X.shape[1]), len(np.unique(y)))
     lstm.fit(generator, epochs=10, verbose=0)
@@ -109,13 +94,18 @@ def train_models(df, target_col):
 # Ensemble Logic
 def ensemble_predict(models, scaler, le, X_input):
     rf, xgb, lstm = models
-    preds = [int(rf.predict(X_input)[0]), int(xgb.predict(X_input)[0])]
+    preds = []
 
+    # Random Forest and XGBoost
+    preds.append(int(rf.predict(X_input)[0]))
+    preds.append(int(xgb.predict(X_input)[0]))
+
+    # LSTM
     X_scaled = scaler.transform(X_input)
-    if len(X_scaled) < 3:
-        X_scaled = np.vstack([X_scaled] * 3)
-    seq_input = np.array([X_scaled[-3:]])
-    lstm_pred = lstm.predict(seq_input, verbose=0)
+    sequence = np.vstack([X_scaled] * 3)[-3:]  # Ensure 3 time steps
+    sequence = sequence.reshape((1, 3, X_scaled.shape[1]))
+
+    lstm_pred = lstm.predict(sequence, verbose=0)
     preds.append(int(np.argmax(lstm_pred)))
 
     final_encoded = max(set(preds), key=preds.count)
