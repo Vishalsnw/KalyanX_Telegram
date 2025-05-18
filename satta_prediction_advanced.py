@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import requests
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 import joblib
 from sklearn.ensemble import RandomForestClassifier
 from xgboost import XGBClassifier
@@ -29,7 +29,6 @@ def send_telegram_message(message):
 # File Setup
 def ensure_files():
     if not os.path.exists("enhanced_satta_data.csv"):
-        print("Creating placeholder enhanced_satta_data.csv")
         df = pd.DataFrame(columns=[
             "Date", "Market", "Open", "Jodi", "Close", "day_of_week", "is_weekend",
             "open_sum", "close_sum", "mirror_open", "mirror_close",
@@ -48,29 +47,66 @@ def ensure_files():
 # Load Dataset
 def load_data():
     df = pd.read_csv("enhanced_satta_data.csv")
-    df.dropna(inplace=True)
+    df.dropna(subset=["Jodi", "Open", "Close"], inplace=True)
     df['Date'] = pd.to_datetime(df['Date'], dayfirst=True)
     df = df.sort_values("Date")
     return df
 
 # Feature Engineering
+def add_features(df):
+    df['day_of_week'] = df['Date'].dt.weekday
+    df['is_weekend'] = df['day_of_week'].isin([5,6]).astype(int)
+    df['open_sum'] = df['Open'].astype(str).str.zfill(3).apply(lambda x: sum(int(d) for d in x)%10)
+    df['close_sum'] = df['Close'].astype(str).str.zfill(3).apply(lambda x: sum(int(d) for d in x)%10)
+    df['mirror_open'] = df['Open'].astype(str).str.zfill(3).apply(lambda x: ''.join(str((10 - int(d)) % 10) for d in x))
+    df['mirror_close'] = df['Close'].astype(str).str.zfill(3).apply(lambda x: ''.join(str((10 - int(d)) % 10) for d in x))
+    df['reverse_jodi'] = df['Jodi'].astype(str).str.zfill(2).apply(lambda x: x[::-1])
+    df['is_holiday'] = 0  # Optional: set actual holidays
+    df['prev_jodi_distance'] = df['Jodi'].astype(str).str.zfill(2).astype(int).diff().fillna(0).abs()
+    return df
+
+# Append New Results
+def append_actual_results_if_any():
+    if not os.path.exists("predictions.csv"):
+        return
+
+    df = pd.read_csv("enhanced_satta_data.csv")
+    df_pred = pd.read_csv("predictions.csv")
+    df_pred["Date"] = pd.to_datetime(df_pred["Date"])
+    latest_date = df["Date"].max() if not df.empty else pd.to_datetime("2000-01-01")
+
+    # Filter new results that are not yet in main data
+    new_results = df_pred[df_pred["Posted"] == "Yes"]
+    new_results = new_results[new_results["Date"] > latest_date]
+
+    if not new_results.empty:
+        new_rows = []
+        for _, row in new_results.iterrows():
+            new_row = {
+                "Date": row["Date"].strftime("%d/%m/%Y"),
+                "Market": row["Market"],
+                "Open": row["Open"],
+                "Close": row["Close"],
+                "Jodi": row["Jodi"],
+            }
+            new_rows.append(new_row)
+
+        df_new = pd.DataFrame(new_rows)
+        df_new['Date'] = pd.to_datetime(df_new['Date'], dayfirst=True)
+        df_new = add_features(df_new)
+
+        df = pd.concat([df, df_new])
+        df = df.drop_duplicates(subset=["Date", "Market"], keep="last")
+        df.to_csv("enhanced_satta_data.csv", index=False)
+
+# Preprocess for model training
 def preprocess_features(df, market):
     df_market = df[df["Market"] == market].copy()
-    df_market = df_market.dropna(subset=["Jodi", "Open", "Close"])
-    df_market = df_market.tail(60)
-
-    if len(df_market) < 10:
-        return None
-
     df_market["Jodi"] = df_market["Jodi"].astype(str).str.zfill(2)
     df_market["OpenDigit"] = df_market["Jodi"].str[0].astype(int)
     df_market["CloseDigit"] = df_market["Jodi"].str[1].astype(int)
-    df_market["Open"] = df_market["Open"].astype(int)
-    df_market["Close"] = df_market["Close"].astype(int)
     df_market["Patti"] = df_market["Open"]
     df_market["Weekday"] = df_market["Date"].dt.weekday
-    df_market["PrevJodi"] = df_market["Jodi"].shift(1).fillna("00").astype(str).str.zfill(2)
-
     return df_market.dropna()
 
 # LSTM Model
@@ -90,7 +126,7 @@ def train_models(df, target_col):
     le = LabelEncoder()
     y = le.fit_transform(y_raw)
 
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    X_train, _, y_train, _ = train_test_split(X, y, test_size=0.2, random_state=42)
 
     rf = RandomForestClassifier(n_estimators=100)
     rf.fit(X_train, y_train)
@@ -100,7 +136,6 @@ def train_models(df, target_col):
 
     scaler = MinMaxScaler()
     X_scaled = scaler.fit_transform(X_train)
-
     X_lstm = X_scaled.reshape((X_scaled.shape[0], 1, X_scaled.shape[1]))
     lstm = build_lstm_model((1, X.shape[1]), len(np.unique(y)))
     lstm.fit(X_lstm, y_train, epochs=10, verbose=0)
@@ -124,7 +159,7 @@ def ensemble_predict(models, scaler, le, X_input):
     final_encoded = max(set(preds), key=preds.count)
     return le.inverse_transform([final_encoded])[0]
 
-# Prediction per Market
+# Predict for Market
 def predict_for_market(df, market):
     df_market = preprocess_features(df, market)
     if df_market is None or len(df_market) < 10:
@@ -144,35 +179,10 @@ def predict_for_market(df, market):
             predictions[col] = "?"
     return predictions
 
-# Accuracy Logging
-def log_accuracy(df_actual, df_pred):
-    df_actual["Date"] = pd.to_datetime(df_actual["Date"])
-    df_pred["Date"] = pd.to_datetime(df_pred["Date"])
-
-    merged = pd.merge(df_actual, df_pred, on=["Date", "Market"], suffixes=('_actual', '_pred'))
-    if merged.empty:
-        print("No matching predictions to log accuracy.")
-        return
-
-    acc_logs = []
-    for _, row in merged.iterrows():
-        acc_logs.append([
-            row["Date"].strftime("%Y-%m-%d"),
-            row["Market"],
-            int(row["Open_actual"] == row["Open_pred"]),
-            int(row["Close_actual"] == row["Close_pred"]),
-            int(row["Jodi_actual"] == row["Jodi_pred"]),
-            int(row["Patti_actual"] == row["Patti_pred"])
-        ])
-    df_log = pd.DataFrame(acc_logs, columns=["Date", "Market", "Open_Acc", "Close_Acc", "Jodi_Acc", "Patti_Acc"])
-    if os.path.exists("accuracy_log.csv"):
-        old = pd.read_csv("accuracy_log.csv")
-        df_log = pd.concat([old, df_log]).drop_duplicates(subset=["Date", "Market"], keep="last")
-    df_log.to_csv("accuracy_log.csv", index=False)
-
 # Main Execution
 def main():
     ensure_files()
+    append_actual_results_if_any()
     df = load_data()
     today = datetime.now().strftime("%Y-%m-%d")
     markets = df["Market"].unique()
