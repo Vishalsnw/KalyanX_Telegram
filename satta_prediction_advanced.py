@@ -28,7 +28,7 @@ def send_telegram_message(message):
 
 # Data Load
 def load_data():
-    df = pd.read_csv("satta_data.csv")
+    df = pd.read_csv("enhanced_satta_data.csv")
     df.dropna(inplace=True)
     df['Date'] = pd.to_datetime(df['Date'], dayfirst=True)
     df = df.sort_values("Date")
