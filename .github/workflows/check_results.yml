@@ -8,6 +8,7 @@ on:
 jobs:
   run-checker:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout repo
         uses: actions/checkout@v3
@@ -25,11 +26,16 @@ jobs:
       - name: Run result checker
         run: python satta_result_checker.py
 
+      - name: Ensure accuracy_log.csv exists
+        run: |
+          [ -f accuracy_log.csv ] || echo "Market,Date,Open_Pred,Open_Act,Close_Pred,Close_Act,Jodi_Pred,Jodi_Act,Open_Match,Close_Match,Jodi_Match,Patti_Match,Model" > accuracy_log.csv
+
       - name: Commit updated CSV if changed
         run: |
           git config --global user.email "bot@example.com"
           git config --global user.name "GitHub Bot"
-          git add enhanced_satta_data.csv accuracy_log.csv
+          if [ -f enhanced_satta_data.csv ]; then git add enhanced_satta_data.csv; fi
+          if [ -f accuracy_log.csv ]; then git add accuracy_log.csv; fi
           git diff --cached --quiet || (
             git commit -m "Auto update results CSV"
             git push
