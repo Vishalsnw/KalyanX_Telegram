@@ -7,7 +7,7 @@ from datetime import datetime
 import joblib
 from sklearn.ensemble import RandomForestClassifier
 from xgboost import XGBClassifier
-from keras.models import Sequential
+from keras.models import Sequential, load_model
 from keras.layers import LSTM, Dense, Dropout
 from keras.preprocessing.sequence import TimeseriesGenerator
 from sklearn.model_selection import train_test_split
@@ -29,11 +29,15 @@ def send_telegram_message(message):
 
 # Data Load
 def load_data():
-    df = pd.read_csv("satta_data.csv")
-    df.dropna(inplace=True)
-    df['Date'] = pd.to_datetime(df['Date'], dayfirst=True)
-    df = df.sort_values("Date")
-    return df
+    try:
+        df = pd.read_csv("satta_data.csv")
+        df.dropna(inplace=True)
+        df['Date'] = pd.to_datetime(df['Date'], dayfirst=True, errors='coerce')
+        df = df.dropna(subset=["Date"]).sort_values("Date")
+        return df
+    except Exception as e:
+        send_telegram_message(f"<b>Data Load Error:</b> {e}")
+        raise
 
 # Feature Engineering
 def preprocess_features(df, market):
@@ -92,21 +96,14 @@ def train_models(df, target_col):
     return rf, xgb, lstm, scaler, le
 
 # Ensemble Logic
-def ensemble_predict(models, scaler, le, X_input):
+def ensemble_predict(models, scaler, le, df_market):
     rf, xgb, lstm = models
-    X_input = np.array(X_input).reshape(1, -1)
-    preds = []
+    sequence_data = df_market[["OpenDigit", "CloseDigit", "Weekday"]].tail(3).values
+    X_input = np.array([sequence_data[-1]])
+    preds = [int(rf.predict(X_input)[0]), int(xgb.predict(X_input)[0])]
 
-    preds.append(int(rf.predict(X_input)[0]))
-    preds.append(int(xgb.predict(X_input)[0]))
-
-    if X_input.shape[0] < 1:
-        return "?"
-
-    X_scaled = scaler.transform(X_input)
-    sequence = np.vstack([X_scaled] * 3)[-3:]
-    sequence = sequence.reshape((1, 3, X_scaled.shape[1]))
-
+    X_scaled = scaler.transform(sequence_data)
+    sequence = X_scaled.reshape((1, 3, X_scaled.shape[1]))
     lstm_pred = lstm.predict(sequence, verbose=0)
     preds.append(int(np.argmax(lstm_pred)))
 
@@ -119,14 +116,11 @@ def predict_for_market(df, market):
     if df_market is None or len(df_market) < 10:
         return None
 
-    latest_row = df_market.iloc[-1]
-    features = [[latest_row["OpenDigit"], latest_row["CloseDigit"], latest_row["Weekday"]]]
-
     predictions = {}
     for col in ["Open", "Close", "Jodi", "Patti"]:
         try:
             rf, xgb, lstm, scaler, le = train_models(df_market, col)
-            pred = ensemble_predict((rf, xgb, lstm), scaler, le, features)
+            pred = ensemble_predict((rf, xgb, lstm), scaler, le, df_market)
             predictions[col] = pred
         except Exception as e:
             print(f"{market} - {col} error: {e}")
@@ -137,8 +131,8 @@ def predict_for_market(df, market):
 def log_accuracy(df_actual, df_pred):
     df_actual["Date"] = pd.to_datetime(df_actual["Date"])
     df_pred["Date"] = pd.to_datetime(df_pred["Date"])
-
     merged = pd.merge(df_actual, df_pred, on=["Date", "Market"], suffixes=('_actual', '_pred'))
+
     if merged.empty:
         print("No matching predictions to log accuracy.")
         return
@@ -146,18 +140,29 @@ def log_accuracy(df_actual, df_pred):
     acc_logs = []
     for _, row in merged.iterrows():
         acc_logs.append([
-            row["Date"].strftime("%Y-%m-%d"),
-            row["Market"],
+            row["Date"].strftime("%Y-%m-%d"), row["Market"],
             int(row["Open_actual"] == row["Open_pred"]),
             int(row["Close_actual"] == row["Close_pred"]),
             int(row["Jodi_actual"] == row["Jodi_pred"]),
             int(row["Patti_actual"] == row["Patti_pred"])
         ])
     df_log = pd.DataFrame(acc_logs, columns=["Date", "Market", "Open_Acc", "Close_Acc", "Jodi_Acc", "Patti_Acc"])
+
     if os.path.exists("accuracy_log.csv"):
         old = pd.read_csv("accuracy_log.csv")
         df_log = pd.concat([old, df_log]).drop_duplicates(subset=["Date", "Market"], keep="last")
+
     df_log.to_csv("accuracy_log.csv", index=False)
+
+    summary = df_log[["Open_Acc", "Close_Acc", "Jodi_Acc", "Patti_Acc"]].mean()
+    summary_msg = (
+        f"<b>Accuracy Log:</b>\n"
+        f"Open: {summary['Open_Acc']:.2%}\n"
+        f"Close: {summary['Close_Acc']:.2%}\n"
+        f"Jodi: {summary['Jodi_Acc']:.2%}\n"
+        f"Patti: {summary['Patti_Acc']:.2%}"
+    )
+    send_telegram_message(summary_msg)
 
 # Main Function
 def main():
@@ -193,4 +198,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
+            
