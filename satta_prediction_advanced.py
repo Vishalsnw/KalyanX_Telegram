@@ -2,106 +2,104 @@ import pandas as pd
 import numpy as np
 import telegram
 from datetime import datetime, timedelta
-import warnings
-import os
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score
-
-warnings.filterwarnings("ignore")
+from sklearn.preprocessing import LabelEncoder
 
 # Telegram credentials
 TELEGRAM_TOKEN = "7121966371:AAEKHVrsqLRswXg64-6Nf3nid-Mbmlmmw5M"
 CHAT_ID = "7621883960"
-bot = telegram.Bot(token=TELEGRAM_TOKEN)
 
-# File paths
-CSV_PATH = "enhanced_satta_data.csv"
-ACCURACY_LOG = "accuracy_log.csv"
-
-# Market list
-MARKETS = ["Time Bazar", "Milan Day", "Rajdhani Day", "Kalyan", "Milan Night", "Rajdhani Night", "Main Bazar"]
-
-def clean_data(df):
-    df = df.dropna(subset=["Market", "Date", "Open", "Close"])
-    df["Date"] = pd.to_datetime(df["Date"], errors='coerce')
-    df = df.dropna(subset=["Date"])
-    df = df.sort_values("Date")
-    df["Jodi"] = df["Open"].astype(str) + df["Close"].astype(str)
-    df["Patti"] = df["Open"].astype(str).str.zfill(1) + df["Close"].astype(str).str.zfill(2)
-    df["Weekday"] = df["Date"].dt.dayofweek
-    return df
-
-def get_features_and_labels(df, col):
-    df["Prev_" + col] = df[col].shift(1)
-    df = df.dropna()
-    X = df[["Prev_" + col, "Weekday"]]
-    y = df[col]
-    return X, y
-
-def train_and_predict(df, market, col):
-    df = df[df["Market"] == market]
-    if len(df) < 20:
-        return None, f"{market}: Not enough data for training"
-    
-    X, y = get_features_and_labels(df, col)
-    if X.empty or y.empty or len(X) < 10:
-        return None, f"{market}: Not enough valid rows after feature prep"
-
-    try:
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
-        model = RandomForestClassifier(n_estimators=100, random_state=42)
-        model.fit(X_train, y_train)
-        acc = accuracy_score(y_test, model.predict(X_test))
-        tomorrow_weekday = (df["Date"].max() + timedelta(days=1)).weekday()
-        last_val = df[col].iloc[-1]
-        pred = model.predict([[last_val, tomorrow_weekday]])[0]
-        return pred, acc
-    except Exception as e:
-        return None, f"{market}: Prediction failed ({str(e)})"
+MARKETS = [
+    "Time Bazar", "Milan Day", "Rajdhani Day", 
+    "Kalyan", "Milan Night", "Rajdhani Night", "Main Bazar"
+]
 
 def send_telegram_message(message):
+    bot = telegram.Bot(token=TELEGRAM_TOKEN)
     bot.send_message(chat_id=CHAT_ID, text=message, parse_mode=telegram.ParseMode.HTML)
 
-def log_accuracy(market, col, acc):
-    row = {
-        "Date": datetime.now().strftime("%Y-%m-%d"),
-        "Market": market,
-        "Field": col,
-        "Accuracy": acc
-    }
-    if not os.path.exists(ACCURACY_LOG):
-        pd.DataFrame([row]).to_csv(ACCURACY_LOG, index=False)
-    else:
-        pd.concat([pd.read_csv(ACCURACY_LOG), pd.DataFrame([row])], ignore_index=True).to_csv(ACCURACY_LOG, index=False)
+def load_data():
+    df = pd.read_csv("enhanced_satta_data.csv")
+    df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+    df = df.dropna(subset=["Date", "Market"])
+    df["Market"] = df["Market"].astype(str).str.strip()
+    df["Open"] = pd.to_numeric(df["Open"], errors="coerce")
+    df["Close"] = pd.to_numeric(df["Close"], errors="coerce")
+    return df
+
+def engineer_features(df_market):
+    df_market = df_market.sort_values("Date")
+    df_market["Prev_Open"] = df_market["Open"].shift(1)
+    df_market["Prev_Close"] = df_market["Close"].shift(1)
+    df_market["Weekday"] = df_market["Date"].dt.weekday
+    df_market = df_market.dropna(subset=["Prev_Open", "Prev_Close", "Open", "Close"])
+    return df_market
+
+def train_and_predict(df, market):
+    df_market = df[df["Market"] == market].copy()
+    df_market = engineer_features(df_market)
+
+    if len(df_market) < 10:
+        print(f"{market}: Not enough valid data after feature engineering. Rows: {len(df_market)}")
+        return None, None
+
+    # Predict next day
+    tomorrow = df_market["Date"].max() + timedelta(days=1)
+    weekday = tomorrow.weekday()
+
+    # Prepare data
+    features = ["Prev_Open", "Prev_Close", "Weekday"]
+    X = df_market[features]
+    y_open = df_market["Open"].astype(int)
+    y_close = df_market["Close"].astype(int)
+
+    if X.isnull().any().any() or y_open.isnull().any() or y_close.isnull().any():
+        print(f"{market}: Found NaNs in training data.")
+        return None, None
+
+    try:
+        X_train, X_test, y_train_open, y_test_open = train_test_split(X, y_open, test_size=0.2, random_state=42)
+        model_open = RandomForestClassifier(n_estimators=100, random_state=42)
+        model_open.fit(X_train, y_train_open)
+
+        y_train_close, y_test_close = train_test_split(y_close, test_size=0.2, random_state=42)
+        model_close = RandomForestClassifier(n_estimators=100, random_state=42)
+        model_close.fit(X_train, y_train_close)
+
+        # Predict for tomorrow
+        last_row = df_market.iloc[-1]
+        X_pred = pd.DataFrame([{
+            "Prev_Open": last_row["Open"],
+            "Prev_Close": last_row["Close"],
+            "Weekday": weekday
+        }])
+
+        open_pred = int(model_open.predict(X_pred)[0])
+        close_pred = int(model_close.predict(X_pred)[0])
+        return open_pred, close_pred
+
+    except Exception as e:
+        print(f"{market} prediction error: {e}")
+        return None, None
 
 def main():
-    if not os.path.exists(CSV_PATH):
-        print("CSV not found.")
-        return
-
-    df = pd.read_csv(CSV_PATH)
-    df = clean_data(df)
-
+    df = load_data()
     tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
     full_message = f"<b>Tomorrow's Predictions ({tomorrow}):</b>\n"
 
     for market in MARKETS:
         try:
-            open_pred, open_acc = train_and_predict(df, market, "Open")
-            close_pred, close_acc = train_and_predict(df, market, "Close")
-            jodi_pred = f"{open_pred}{close_pred}" if open_pred and close_pred else "N/A"
-            if isinstance(open_pred, str) and open_pred.startswith(market):
-                full_message += f"\n<b>{open_pred}</b>"
-                continue
-
-            full_message += f"\n<b>{market}</b>:\nOpen: <b>{open_pred}</b>, Close: <b>{close_pred}</b>, Jodi: <b>{jodi_pred}</b>"
-            log_accuracy(market, "Open", open_acc)
-            log_accuracy(market, "Close", close_acc)
-
+            open_pred, close_pred = train_and_predict(df, market)
+            if open_pred is None or close_pred is None:
+                full_message += f"\n<b>{market}:</b> Not enough data to predict"
+            else:
+                jodi = f"{open_pred}{close_pred}"[-2:]
+                full_message += f"\n<b>{market}</b>:\nOpen: {open_pred}, Close: {close_pred}, Jodi: {jodi}"
         except Exception as e:
-            full_message += f"\n<b>{market}</b>: Prediction error - {str(e)}"
+            full_message += f"\n<b>{market}:</b> Prediction failed ({str(e)})"
 
+    print(full_message)
     send_telegram_message(full_message)
 
 if __name__ == "__main__":
