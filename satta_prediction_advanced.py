@@ -10,8 +10,7 @@ from keras.models import Sequential
 from keras.layers import LSTM, Dense, Dropout
 from keras.preprocessing.sequence import TimeseriesGenerator
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import MinMaxScaler
-
+from sklearn.preprocessing import MinMaxScaler, LabelEncoder
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -51,7 +50,7 @@ def preprocess_features(df, market):
     df_market["CloseDigit"] = df_market["Jodi"].str[1].astype(int)
     df_market["Open"] = df_market["Open"].astype(int)
     df_market["Close"] = df_market["Close"].astype(int)
-    df_market["Patti"] = df_market["Open"]  # You can switch to Close if preferred
+    df_market["Patti"] = df_market["Open"]  # or Close
     df_market["Weekday"] = df_market["Date"].dt.weekday
     return df_market
 
@@ -67,7 +66,9 @@ def build_lstm_model(input_shape, output_classes):
 
 def train_models(df, target_col):
     X = df[["OpenDigit", "CloseDigit", "Weekday"]]
-    y = df[target_col].astype(int)
+    y_raw = df[target_col].astype(str)  # Convert target to string for label encoding
+    le = LabelEncoder()
+    y = le.fit_transform(y_raw)
 
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
@@ -84,9 +85,9 @@ def train_models(df, target_col):
     lstm = build_lstm_model((3, X.shape[1]), len(np.unique(y)))
     lstm.fit(generator, epochs=10, verbose=0)
 
-    return rf, xgb, lstm, scaler
+    return rf, xgb, lstm, scaler, le
 
-def ensemble_predict(models, scaler, X_input):
+def ensemble_predict(models, scaler, label_encoder, X_input):
     rf, xgb, lstm = models
     preds = []
 
@@ -100,7 +101,8 @@ def ensemble_predict(models, scaler, X_input):
     lstm_pred = lstm.predict(seq_input, verbose=0)
     preds.append(int(np.argmax(lstm_pred)))
 
-    final = max(set(preds), key=preds.count)
+    final_encoded = max(set(preds), key=preds.count)
+    final = label_encoder.inverse_transform([final_encoded])[0]
     return final
 
 def predict_for_market(df, market):
@@ -115,8 +117,8 @@ def predict_for_market(df, market):
     predictions = {}
     for col in ["Open", "Close", "Jodi", "Patti"]:
         try:
-            rf, xgb, lstm, scaler = train_models(df_market, col)
-            pred = ensemble_predict((rf, xgb, lstm), scaler, features)
+            rf, xgb, lstm, scaler, le = train_models(df_market, col)
+            pred = ensemble_predict((rf, xgb, lstm), scaler, le, features)
             predictions[col] = pred
         except Exception as e:
             print(f"Error predicting {col} for {market}: {e}")
