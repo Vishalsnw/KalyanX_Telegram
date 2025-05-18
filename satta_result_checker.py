@@ -6,7 +6,7 @@ from datetime import datetime
 from bs4 import BeautifulSoup
 
 # Constants
-CSV_FILE = "satta_data.csv"
+CSV_FILE = "enhanced_satta_data.csv"
 PRED_FILE = "today_predictions.csv"
 ACCURACY_LOG = "accuracy_log.csv"
 MODEL_TRACK = "model_performance.json"
