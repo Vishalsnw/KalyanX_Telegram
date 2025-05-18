@@ -1,3 +1,4 @@
+# Same imports as before
 import pandas as pd
 import numpy as np
 import requests
@@ -19,11 +20,7 @@ CHAT_ID = "7621883960"
 
 def send_telegram_message(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    data = {
-        "chat_id": CHAT_ID,
-        "text": message,
-        "parse_mode": "HTML"
-    }
+    data = {"chat_id": CHAT_ID, "text": message, "parse_mode": "HTML"}
     requests.post(url, data=data)
 
 def load_data():
@@ -35,14 +32,7 @@ def load_data():
 
 def preprocess_features(df, market):
     df_market = df[df["Market"] == market].copy()
-    
-    required_cols = ["Jodi", "Open", "Close"]
-    for col in required_cols:
-        if col not in df_market.columns or df_market[col].isnull().all():
-            print(f"Skipping {market} — missing column: {col}")
-            return None
-
-    df_market = df_market.dropna(subset=required_cols)
+    df_market = df_market.dropna(subset=["Jodi", "Open", "Close"])
     df_market = df_market.tail(60)
 
     df_market["Jodi"] = df_market["Jodi"].astype(str).str.zfill(2)
@@ -50,9 +40,10 @@ def preprocess_features(df, market):
     df_market["CloseDigit"] = df_market["Jodi"].str[1].astype(int)
     df_market["Open"] = df_market["Open"].astype(int)
     df_market["Close"] = df_market["Close"].astype(int)
-    df_market["Patti"] = df_market["Open"]  # or Close
+    df_market["Patti"] = df_market["Open"]  # You can enhance this further
     df_market["Weekday"] = df_market["Date"].dt.weekday
-    return df_market
+    df_market["PrevJodi"] = df_market["Jodi"].shift(1).fillna("00").astype(str).str.zfill(2)
+    return df_market.dropna()
 
 def build_lstm_model(input_shape, output_classes):
     model = Sequential()
@@ -66,7 +57,7 @@ def build_lstm_model(input_shape, output_classes):
 
 def train_models(df, target_col):
     X = df[["OpenDigit", "CloseDigit", "Weekday"]]
-    y_raw = df[target_col].astype(str)  # Convert target to string for label encoding
+    y_raw = df[target_col].astype(str)
     le = LabelEncoder()
     y = le.fit_transform(y_raw)
 
@@ -78,7 +69,6 @@ def train_models(df, target_col):
     xgb = XGBClassifier()
     xgb.fit(X_train, y_train)
 
-    # LSTM
     scaler = MinMaxScaler()
     X_scaled = scaler.fit_transform(X)
     generator = TimeseriesGenerator(X_scaled, y, length=3, batch_size=1)
@@ -89,14 +79,11 @@ def train_models(df, target_col):
 
 def ensemble_predict(models, scaler, label_encoder, X_input):
     rf, xgb, lstm = models
-    preds = []
-
-    preds.append(int(rf.predict(X_input)[0]))
-    preds.append(int(xgb.predict(X_input)[0]))
+    preds = [int(rf.predict(X_input)[0]), int(xgb.predict(X_input)[0])]
 
     X_scaled = scaler.transform(X_input)
     if len(X_scaled) < 3:
-        X_scaled = np.vstack([X_scaled]*3)
+        X_scaled = np.vstack([X_scaled] * 3)
     seq_input = np.array([X_scaled[-3:]])
     lstm_pred = lstm.predict(seq_input, verbose=0)
     preds.append(int(np.argmax(lstm_pred)))
@@ -108,12 +95,10 @@ def ensemble_predict(models, scaler, label_encoder, X_input):
 def predict_for_market(df, market):
     df_market = preprocess_features(df, market)
     if df_market is None or len(df_market) < 10:
-        print(f"Skipping {market} due to insufficient data.")
         return None
 
     latest_row = df_market.iloc[-1]
     features = [[latest_row["OpenDigit"], latest_row["CloseDigit"], latest_row["Weekday"]]]
-
     predictions = {}
     for col in ["Open", "Close", "Jodi", "Patti"]:
         try:
@@ -121,35 +106,61 @@ def predict_for_market(df, market):
             pred = ensemble_predict((rf, xgb, lstm), scaler, le, features)
             predictions[col] = pred
         except Exception as e:
-            print(f"Error predicting {col} for {market}: {e}")
+            print(f"{market} - {col} prediction error: {e}")
             predictions[col] = "?"
-
     return predictions
+
+def log_accuracy(df_actual, df_pred):
+    df_actual["Date"] = pd.to_datetime(df_actual["Date"])
+    df_pred["Date"] = pd.to_datetime(df_pred["Date"])
+
+    merged = pd.merge(df_actual, df_pred, on=["Date", "Market"], suffixes=('_actual', '_pred'))
+    acc_logs = []
+    for _, row in merged.iterrows():
+        acc_logs.append([
+            row["Date"].strftime("%Y-%m-%d"),
+            row["Market"],
+            int(row["Open_actual"] == row["Open_pred"]),
+            int(row["Close_actual"] == row["Close_pred"]),
+            int(row["Jodi_actual"] == row["Jodi_pred"]),
+            int(row["Patti_actual"] == row["Patti_pred"])
+        ])
+    df_log = pd.DataFrame(acc_logs, columns=["Date", "Market", "Open_Acc", "Close_Acc", "Jodi_Acc", "Patti_Acc"])
+    if os.path.exists("accuracy_log.csv"):
+        old = pd.read_csv("accuracy_log.csv")
+        df_log = pd.concat([old, df_log]).drop_duplicates(subset=["Date", "Market"], keep="last")
+    df_log.to_csv("accuracy_log.csv", index=False)
 
 def main():
     df = load_data()
-    markets = df["Market"].unique()
     today = datetime.now().strftime("%Y-%m-%d")
+    markets = df["Market"].unique()
     prediction_log = []
 
     for market in markets:
         try:
             result = predict_for_market(df, market)
             if result:
-                message = f"<b>{market} Prediction for {today}</b>\n"
-                message += f"<b>Open:</b> {result['Open']}\n<b>Close:</b> {result['Close']}\n"
-                message += f"<b>Jodi:</b> {result['Jodi']}\n<b>Patti:</b> {result['Patti']}"
+                message = (
+                    f"<b>{market} Prediction for {today}</b>\n"
+                    f"<b>Open:</b> {result['Open']}\n"
+                    f"<b>Close:</b> {result['Close']}\n"
+                    f"<b>Jodi:</b> {result['Jodi']}\n"
+                    f"<b>Patti:</b> {result['Patti']}"
+                )
                 send_telegram_message(message)
-                prediction_log.append([today, market, result['Open'], result['Close'], result['Jodi'], result['Patti'], "No"])
+                prediction_log.append([
+                    today, market, result["Open"], result["Close"], result["Jodi"], result["Patti"], "No"
+                ])
         except Exception as e:
-            print(f"Error predicting for {market}: {e}")
+            print(f"Failed prediction for {market}: {e}")
 
     if prediction_log:
-        df_log = pd.DataFrame(prediction_log, columns=["Date", "Market", "Open", "Close", "Jodi", "Patti", "Posted"])
+        df_pred = pd.DataFrame(prediction_log, columns=["Date", "Market", "Open", "Close", "Jodi", "Patti", "Posted"])
         if os.path.exists("predictions.csv"):
             old = pd.read_csv("predictions.csv")
-            df_log = pd.concat([old, df_log]).drop_duplicates(subset=["Date", "Market"], keep="last")
-        df_log.to_csv("predictions.csv", index=False)
+            df_pred = pd.concat([old, df_pred]).drop_duplicates(subset=["Date", "Market"], keep="last")
+        df_pred.to_csv("predictions.csv", index=False)
 
 if __name__ == "__main__":
     main()
