@@ -35,11 +35,17 @@ def load_data():
     return df
 
 def engineer_features(df_market):
-    df_market = df_market.sort_values("Date")
+    df_market = df_market.sort_values("Date").copy()
+
     df_market["Prev_Open"] = df_market["Open"].shift(1)
     df_market["Prev_Close"] = df_market["Close"].shift(1)
     df_market["Weekday"] = df_market["Date"].dt.weekday
-    df_market = df_market.dropna()
+
+    df_market = df_market.iloc[1:]
+
+    df_market = df_market[pd.to_numeric(df_market["Prev_Open"], errors='coerce').notnull()]
+    df_market = df_market[pd.to_numeric(df_market["Prev_Close"], errors='coerce').notnull()]
+
     return df_market
 
 def generate_jodis(open_vals, close_vals):
@@ -62,6 +68,8 @@ def train_and_predict(df, market):
     print("Data points available:", len(df_market))
 
     df_market = engineer_features(df_market)
+    print(f"{market} - usable after engineering: {len(df_market)} rows")
+
     if len(df_market) < 20:
         print("Not enough data after feature engineering.")
         return None, None
