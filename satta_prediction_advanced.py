@@ -69,7 +69,7 @@ def build_lstm_model(input_shape, output_classes):
 # Train All 3 Models
 def train_models(df, target_col):
     X = df[["OpenDigit", "CloseDigit", "Weekday"]]
-    y_raw = df[target_col].astype(str)
+    y_raw = df[target_col].astype(str).str.zfill(2) if target_col == "Jodi" else df[target_col].astype(str)
 
     le = LabelEncoder()
     y = le.fit_transform(y_raw)
@@ -94,15 +94,17 @@ def train_models(df, target_col):
 # Ensemble Logic
 def ensemble_predict(models, scaler, le, X_input):
     rf, xgb, lstm = models
+    X_input = np.array(X_input).reshape(1, -1)
     preds = []
 
-    # Random Forest and XGBoost
     preds.append(int(rf.predict(X_input)[0]))
     preds.append(int(xgb.predict(X_input)[0]))
 
-    # LSTM
+    if X_input.shape[0] < 1:
+        return "?"
+
     X_scaled = scaler.transform(X_input)
-    sequence = np.vstack([X_scaled] * 3)[-3:]  # Ensure 3 time steps
+    sequence = np.vstack([X_scaled] * 3)[-3:]
     sequence = sequence.reshape((1, 3, X_scaled.shape[1]))
 
     lstm_pred = lstm.predict(sequence, verbose=0)
@@ -137,6 +139,10 @@ def log_accuracy(df_actual, df_pred):
     df_pred["Date"] = pd.to_datetime(df_pred["Date"])
 
     merged = pd.merge(df_actual, df_pred, on=["Date", "Market"], suffixes=('_actual', '_pred'))
+    if merged.empty:
+        print("No matching predictions to log accuracy.")
+        return
+
     acc_logs = []
     for _, row in merged.iterrows():
         acc_logs.append([
@@ -187,3 +193,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
