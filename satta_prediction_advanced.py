@@ -4,11 +4,9 @@ import datetime
 import telegram
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score
 import warnings
 warnings.filterwarnings("ignore")
 
-# Telegram details
 TELEGRAM_TOKEN = "7121966371:AAEKHVrsqLRswXg64-6Nf3nid-Mbmlmmw5M"
 CHAT_ID = "7621883960"
 
@@ -17,34 +15,33 @@ df = pd.read_csv("enhanced_satta_data.csv")
 df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
 df = df.dropna(subset=['Date'])
 
-# Filter recent 60 days
 today = datetime.date.today()
+ninety_days_ago = pd.to_datetime(today - datetime.timedelta(days=90))
+df = df[df['Date'] >= ninety_days_ago]
 df = df[df['Date'] < pd.to_datetime(today)]
 df = df.sort_values(by=["Market", "Date"])
 
-# Define features and targets
 def prepare_features(df_market):
     df_market['DayOfWeek'] = df_market['Date'].dt.dayofweek
     df_market['Prev_Open'] = df_market['Open'].shift(1)
     df_market['Prev_Close'] = df_market['Close'].shift(1)
     df_market['Prev_Jodi'] = df_market['Jodi'].shift(1)
     df_market['Prev_Patti'] = df_market['Patti'].shift(1)
-
     df_market = df_market.dropna()
     features = ['DayOfWeek', 'Prev_Open', 'Prev_Close', 'Prev_Jodi', 'Prev_Patti']
     return df_market, features
 
-# Train model per target
 def train_predict(df_market, features, target):
     X = df_market[features]
     y = df_market[target]
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
+    if len(X) < 10:
+        raise ValueError("Not enough data for training")
+    X_train, _, y_train, _ = train_test_split(X, y, test_size=0.2, shuffle=False)
     model = RandomForestClassifier(n_estimators=100, random_state=42)
     model.fit(X_train, y_train)
     pred = model.predict([X.iloc[-1].values])[0]
     return pred
 
-# Telegram send
 def send_telegram_message(message):
     try:
         bot = telegram.Bot(token=TELEGRAM_TOKEN)
@@ -52,7 +49,6 @@ def send_telegram_message(message):
     except Exception as e:
         print(f"Telegram error: {e}")
 
-# Prediction
 def predict_all():
     markets = df['Market'].unique()
     full_msg = "<b>Tomorrow's Predictions:</b>\n\n"
@@ -78,6 +74,5 @@ def predict_all():
 
     send_telegram_message(full_msg)
 
-# Main call
 if __name__ == "__main__":
     predict_all()
