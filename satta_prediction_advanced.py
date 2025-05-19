@@ -18,46 +18,34 @@ def send_telegram_message(message):
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
     bot.send_message(chat_id=CHAT_ID, text=message, parse_mode=telegram.ParseMode.HTML)
 
-# --- Load Data ---
+# --- Load and clean data ---
 def load_data():
     df = pd.read_csv(DATA_FILE)
-    df["Market"] = df["Market"].astype(str).str.strip()
+    df = df[["Date", "Market", "Open", "Close", "Open Patti", "Jodi", "Close Patti"]]
     df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
-    df = df.dropna(subset=["Date", "Market", "Open", "Close"])
+    df = df.dropna()
     df["Open"] = pd.to_numeric(df["Open"], errors="coerce")
     df["Close"] = pd.to_numeric(df["Close"], errors="coerce")
-    df = df.dropna()
-    return df
+    return df.dropna()
 
 # --- Feature Engineering ---
-def engineer_features(df_market):
+def prepare_features(df_market):
     df = df_market.sort_values("Date").copy()
     df["Prev_Open"] = df["Open"].shift(1)
     df["Prev_Close"] = df["Close"].shift(1)
     df["Weekday"] = df["Date"].dt.weekday
-    df["Jodi"] = df["Open"].astype(int).astype(str) + df["Close"].astype(int).astype(str)
-    df["Patti_Open"] = df["Open"].apply(lambda x: str(int(x)).zfill(3))
-    df["Patti_Close"] = df["Close"].apply(lambda x: str(int(x)).zfill(3))
-    df = df.dropna(subset=["Prev_Open", "Prev_Close"])
+    df = df.dropna()
     return df
 
-# --- Fill Missing Features if Needed ---
-def ensure_features(df_market):
-    df = df_market.copy()
-    if "Prev_Open" not in df.columns or df["Prev_Open"].isnull().sum() > 0:
-        df = engineer_features(df)
-    return df
-
-# --- Utility Functions ---
 def patti_to_digit(patti):
-    return sum(int(d) for d in str(int(patti)).zfill(3)) % 10
+    return str(sum(int(d) for d in str(patti).zfill(3)) % 10)
 
 def generate_jodis(open_digits, close_digits):
     return list(set([f"{o}{c}"[-2:] for o in open_digits for c in close_digits]))[:10]
 
-def generate_pattis(open_vals, close_vals):
+def generate_pattis(patti_list):
     pattis = set()
-    for val in open_vals + close_vals:
+    for val in patti_list:
         try:
             base = int(val)
             pattis.update([str(base + i).zfill(3) for i in range(4)])
@@ -65,62 +53,51 @@ def generate_pattis(open_vals, close_vals):
             continue
     return list(pattis)[:4]
 
-# --- Model Trainer ---
 def train_model(X, y):
     if len(X) < 5:
         return None
-    model = RandomForestClassifier(n_estimators=100, max_depth=None)
+    model = RandomForestClassifier(n_estimators=100)
     model.fit(X, y)
     return model
 
-# --- Train and Predict ---
 def train_and_predict(df, market):
-    df_market = df[df["Market"] == market].copy()
-    if df_market.empty:
-        return None, None
+    df_market = df[df["Market"] == market]
+    if len(df_market) < 6:
+        return None
 
-    df_market = ensure_features(df_market)
+    df_market = prepare_features(df_market)
     if len(df_market) < 5:
-        return None, None
+        return None
 
     last_row = df_market.iloc[-1]
-    tomorrow = df_market["Date"].max() + timedelta(days=1)
-    weekday = tomorrow.weekday()
+    tomorrow_weekday = (df_market["Date"].max() + timedelta(days=1)).weekday()
 
     X = df_market[["Prev_Open", "Prev_Close", "Weekday"]]
-    y_open = df_market["Open"].astype(int)
-    y_close = df_market["Close"].astype(int)
+    y_open_patti = df_market["Open Patti"].astype(str).str.zfill(3)
+    y_close_patti = df_market["Close Patti"].astype(str).str.zfill(3)
 
-    if len(X) != len(y_open) or len(X) != len(y_close):
-        return None, None
+    model_open = train_model(X, y_open_patti)
+    model_close = train_model(X, y_close_patti)
 
-    try:
-        model_open = train_model(X, y_open)
-        model_close = train_model(X, y_close)
+    if model_open is None or model_close is None:
+        return None
 
-        if model_open is None or model_close is None:
-            return None, None
+    X_pred = pd.DataFrame([{
+        "Prev_Open": last_row["Open"],
+        "Prev_Close": last_row["Close"],
+        "Weekday": tomorrow_weekday
+    }])
 
-        X_pred = pd.DataFrame([{
-            "Prev_Open": last_row["Open"],
-            "Prev_Close": last_row["Close"],
-            "Weekday": weekday
-        }])
+    open_probs = model_open.predict_proba(X_pred)[0]
+    close_probs = model_close.predict_proba(X_pred)[0]
 
-        open_probs = model_open.predict_proba(X_pred)[0]
-        close_probs = model_close.predict_proba(X_pred)[0]
+    open_classes = model_open.classes_
+    close_classes = model_close.classes_
 
-        open_classes = model_open.classes_
-        close_classes = model_close.classes_
+    top_open = [open_classes[i] for i in np.argsort(open_probs)[-2:][::-1]]
+    top_close = [close_classes[i] for i in np.argsort(close_probs)[-2:][::-1]]
 
-        open_vals = [open_classes[i] for i in np.argsort(open_probs)[-2:][::-1]]
-        close_vals = [close_classes[i] for i in np.argsort(close_probs)[-2:][::-1]]
-
-        return open_vals, close_vals
-
-    except Exception as e:
-        print(f"{market} - Error: {e}")
-        return None, None
+    return top_open, top_close
 
 # --- Main ---
 def main():
@@ -129,15 +106,18 @@ def main():
     full_msg = f"<b>Tomorrow's Predictions ({tomorrow}):</b>\n"
 
     for market in MARKETS:
-        open_vals, close_vals = train_and_predict(df, market)
-        if not open_vals or not close_vals:
+        result = train_and_predict(df, market)
+        if result is None:
             full_msg += f"\n<b>{market}</b>\n<i>Not enough data for prediction</i>\n"
             continue
 
-        open_digits = [str(patti_to_digit(val)) for val in open_vals]
-        close_digits = [str(patti_to_digit(val)) for val in close_vals]
+        top_open, top_close = result
+
+        open_digits = [patti_to_digit(p) for p in top_open]
+        close_digits = [patti_to_digit(p) for p in top_close]
+
         jodis = generate_jodis(open_digits, close_digits)
-        pattis = generate_pattis(open_vals, close_vals)
+        pattis = generate_pattis(top_open + top_close)
 
         full_msg += (
             f"\n<b>{market}</b>\n"
