@@ -71,26 +71,39 @@ def train_model(X, y):
 
 def train_and_predict(df, market):
     df_market = df[df["Market"] == market].copy()
-    if len(df_market) < 15:
-        return None, None
-
     df_market = engineer_features(df_market)
+
+    print(f"{market} - Rows after cleaning: {len(df_market)}")
+
+    # Lowered threshold from 30 to 10
     if len(df_market) < 10:
-        return None, None
+        return None, None, None, None
+
+    tomorrow = df_market["Date"].max() + timedelta(days=1)
+    weekday = tomorrow.weekday()
+    last_row = df_market.iloc[-1]
 
     X = df_market[["Prev_Open", "Prev_Close", "Weekday"]]
     y_open = df_market["Open"].astype(int)
     y_close = df_market["Close"].astype(int)
 
-    X_pred = pd.DataFrame([{
-        "Prev_Open": df_market.iloc[-1]["Open"],
-        "Prev_Close": df_market.iloc[-1]["Close"],
-        "Weekday": (df_market.iloc[-1]["Date"] + timedelta(days=1)).weekday()
-    }])
+    # Check if X and y lengths match
+    if len(X) != len(y_open) or len(X) != len(y_close):
+        print(f"{market} - X and y length mismatch")
+        return None, None, None, None
 
     try:
-        model_open = train_model(X, y_open)
-        model_close = train_model(X, y_close)
+        X_train, _, y_train_open, _ = train_test_split(X, y_open, test_size=0.2, random_state=42)
+        X_train2, _, y_train_close, _ = train_test_split(X, y_close, test_size=0.2, random_state=42)
+
+        model_open = train_model(X_train, y_train_open)
+        model_close = train_model(X_train2, y_train_close)
+
+        X_pred = pd.DataFrame([{
+            "Prev_Open": last_row["Open"],
+            "Prev_Close": last_row["Close"],
+            "Weekday": weekday
+        }])
 
         open_probs = model_open.predict_proba(X_pred)[0]
         close_probs = model_close.predict_proba(X_pred)[0]
@@ -101,9 +114,11 @@ def train_and_predict(df, market):
         open_vals = [open_classes[i] for i in np.argsort(open_probs)[-2:][::-1]]
         close_vals = [close_classes[i] for i in np.argsort(close_probs)[-2:][::-1]]
 
-        return open_vals, close_vals
-    except:
-        return None, None
+        return open_vals, close_vals, model_open, model_close
+
+    except Exception as e:
+        print(f"{market} - Prediction error: {e}")
+        return None, None, None, None
 
 # --- Main ---
 def main():
