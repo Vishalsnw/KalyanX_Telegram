@@ -12,6 +12,7 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "7121966371:AAEKHVrsqLRswXg64-6Nf3n
 CHAT_ID = os.getenv("CHAT_ID", "7621883960")
 MARKETS = ["Time Bazar", "Milan Day", "Rajdhani Day", "Kalyan", "Milan Night", "Rajdhani Night", "Main Bazar"]
 DATA_FILE = "satta_data.csv"
+ACCURACY_LOG = "accuracy_log.csv"
 
 # --- Telegram ---
 def send_telegram_message(message):
@@ -55,6 +56,19 @@ def generate_pattis(open_vals, close_vals):
             continue
     return list(pattis)[:4]
 
+def flip_number(jodi):
+    return jodi[::-1] if len(jodi) == 2 else jodi
+
+def is_near_miss(actual, predicted_jodis):
+    actual = int(actual)
+    for pred in predicted_jodis:
+        try:
+            if abs(int(pred) - actual) <= 5:
+                return True
+        except:
+            continue
+    return False
+
 # --- Model Trainer ---
 def train_model(X, y):
     if len(X) < 5:
@@ -63,7 +77,7 @@ def train_model(X, y):
     model.fit(X, y)
     return model
 
-# --- Train and Predict ---
+# --- Predict One Market ---
 def train_and_predict(df, market):
     df_market = df[df["Market"] == market].copy()
     if df_market.shape[0] < 6:
@@ -107,17 +121,58 @@ def train_and_predict(df, market):
 
     return open_vals, close_vals
 
+# --- Accuracy Logger ---
+def check_results_and_log_accuracy(df, predictions):
+    today = datetime.now().date()
+    results_today = df[df["Date"].dt.date == today]
+    logs = []
+
+    for market, (open_vals, close_vals) in predictions.items():
+        df_market = results_today[results_today["Market"] == market]
+        if df_market.empty:
+            continue
+
+        row = df_market.iloc[0]
+        actual_open = int(row["Open"])
+        actual_close = int(row["Close"])
+        actual_jodi = f"{actual_open}{actual_close}"[-2:]
+
+        open_digits = [str(patti_to_digit(val)) for val in open_vals]
+        close_digits = [str(patti_to_digit(val)) for val in close_vals]
+        predicted_jodis = generate_jodis(open_digits, close_digits)
+
+        log = {
+            "Date": today.strftime("%d/%m/%Y"),
+            "Market": market,
+            "Actual_Jodi": actual_jodi,
+            "Predicted_Jodis": ', '.join(predicted_jodis),
+            "Exact_Match": actual_jodi in predicted_jodis,
+            "Near_Miss": is_near_miss(actual_jodi, predicted_jodis),
+            "Flip_Match": flip_number(actual_jodi) in predicted_jodis
+        }
+        logs.append(log)
+
+    if logs:
+        df_logs = pd.DataFrame(logs)
+        if os.path.exists(ACCURACY_LOG):
+            df_logs.to_csv(ACCURACY_LOG, mode="a", header=False, index=False)
+        else:
+            df_logs.to_csv(ACCURACY_LOG, index=False)
+
 # --- Main ---
 def main():
     df = load_data()
     tomorrow = (datetime.now() + timedelta(days=1)).strftime("%d/%m/%Y")
     full_msg = f"<b>Tomorrow's Predictions ({tomorrow}):</b>\n"
+    predictions = {}
 
     for market in MARKETS:
         open_vals, close_vals = train_and_predict(df, market)
         if not open_vals or not close_vals:
-            full_msg += f"\n<b>{market}</b>\n<i>Not enough data for prediction</i>\n"
+            full_msg += f"\n<b>{market}</b>\n<i>Not enough data</i>\n"
             continue
+
+        predictions[market] = (open_vals, close_vals)
 
         open_digits = [str(patti_to_digit(val)) for val in open_vals]
         close_digits = [str(patti_to_digit(val)) for val in close_vals]
@@ -133,6 +188,9 @@ def main():
         )
 
     send_telegram_message(full_msg)
+
+    # Check accuracy if results available
+    check_results_and_log_accuracy(df, predictions)
 
 if __name__ == "__main__":
     main()
