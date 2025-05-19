@@ -41,6 +41,13 @@ def engineer_features(df_market):
     df = df.dropna(subset=["Prev_Open", "Prev_Close"])
     return df
 
+# --- Fill Missing Features if Needed ---
+def ensure_features(df_market):
+    df = df_market.copy()
+    if "Prev_Open" not in df.columns or df["Prev_Open"].isnull().sum() > 0:
+        df = engineer_features(df)
+    return df
+
 # --- Utility Functions ---
 def patti_to_digit(patti):
     return sum(int(d) for d in str(int(patti)).zfill(3)) % 10
@@ -72,7 +79,7 @@ def train_and_predict(df, market):
     if df_market.empty:
         return None, None
 
-    df_market = engineer_features(df_market)
+    df_market = ensure_features(df_market)
     if len(df_market) < 5:
         return None, None
 
