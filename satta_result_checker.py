@@ -5,7 +5,7 @@ import requests
 
 # Constants
 CSV_FILE = "satta_data.csv"
-PRED_FILE = "today_ml_predictions.csv"
+PRED_FILE = "today_ml_prediction.csv"
 ACCURACY_LOG = "accuracy_log.csv"
 
 TELEGRAM_BOT_TOKEN = "7121966371:AAEKHVrsqLRswXg64-6Nf3nid-Mbmlmmw5M"
@@ -19,29 +19,22 @@ def send_telegram_message(msg):
     except Exception as e:
         print("Telegram error:", e)
 
-# Load data
+# Check files
 if not os.path.exists(CSV_FILE):
     print("satta_data.csv not found.")
     exit()
-
-df = pd.read_csv(CSV_FILE)
-df["Date"] = pd.to_datetime(df["Date"], format="%d/%m/%Y")
-
-today = datetime.now().strftime("%d/%m/%Y")
-today_dt = datetime.strptime(today, "%d/%m/%Y")
-
-# Load today's actual results from CSV
-today_actuals = df[df["Date"] == today_dt]
 
 if not os.path.exists(PRED_FILE):
     print("Prediction file not found. Skipping accuracy check.")
     exit()
 
-try:
-    pred_df = pd.read_csv(PRED_FILE)
-except Exception as e:
-    print("Error reading prediction file:", e)
-    exit()
+# Load data
+df = pd.read_csv(CSV_FILE)
+df["Date"] = df["Date"].astype(str)  # Ensure string format
+
+pred_df = pd.read_csv(PRED_FILE)
+today = datetime.now().strftime("%d/%m/%Y")
+today_actuals = df[df["Date"] == today]
 
 matched = []
 
@@ -92,11 +85,11 @@ for _, row in pred_df.iterrows():
         "Model": row.get('Model', 'N/A')
     })
 
-# Save to accuracy log
+# Save to log
 log_df = pd.DataFrame(matched)
 log_df.to_csv(ACCURACY_LOG, mode='a', header=not os.path.exists(ACCURACY_LOG), index=False)
 
-# Send Telegram Summary
+# Send Telegram
 summary = []
 for row in matched:
     summary.append(
