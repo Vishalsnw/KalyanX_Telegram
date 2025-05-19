@@ -23,9 +23,10 @@ def load_data():
     df = pd.read_csv(DATA_FILE)
     df["Market"] = df["Market"].astype(str).str.strip()
     df["Date"] = pd.to_datetime(df["Date"], errors="coerce", dayfirst=True)
-    df = df.dropna(subset=["Date", "Market", "Open", "Close"])
+    df = df.dropna(subset=["Date", "Market", "Open", "Close", "Jodi"])
     df["Open"] = pd.to_numeric(df["Open"], errors="coerce")
     df["Close"] = pd.to_numeric(df["Close"], errors="coerce")
+    df["Jodi"] = df["Jodi"].astype(str).str.zfill(2).str[-2:]
     df = df.dropna()
     return df
 
@@ -60,20 +61,21 @@ def train_model(X, y):
     model.fit(X, y)
     return model
 
-# --- Train Open/Close Prediction ---
-def train_and_predict_open_close(df, market):
+# --- Train & Predict ---
+def train_and_predict(df, market):
     df_market = df[df["Market"] == market].copy()
     if df_market.shape[0] < 6:
-        return None, None
+        return None, None, None
 
     df_market = engineer_features(df_market)
     if len(df_market) < 5:
-        return None, None
+        return None, None, None
 
     last_row = df_market.iloc[-1]
     tomorrow = df_market["Date"].max() + timedelta(days=1)
     weekday = tomorrow.weekday()
 
+    # Train Open/Close
     X = df_market[["Prev_Open", "Prev_Close", "Weekday"]]
     y_open = df_market["Open"].astype(int)
     y_close = df_market["Close"].astype(int)
@@ -82,7 +84,7 @@ def train_and_predict_open_close(df, market):
     model_close = train_model(X, y_close)
 
     if model_open is None or model_close is None:
-        return None, None
+        return None, None, None
 
     X_pred = pd.DataFrame([{
         "Prev_Open": last_row["Open"],
@@ -92,41 +94,25 @@ def train_and_predict_open_close(df, market):
 
     open_probs = model_open.predict_proba(X_pred)[0]
     close_probs = model_close.predict_proba(X_pred)[0]
-
     open_classes = model_open.classes_
     close_classes = model_close.classes_
 
     open_vals = [open_classes[i] for i in np.argsort(open_probs)[-2:][::-1]]
     close_vals = [close_classes[i] for i in np.argsort(close_probs)[-2:][::-1]]
 
-    return open_vals, close_vals
+    # --- Jodi Model ---
+    df_jodi = df_market[["Prev_Open", "Prev_Close", "Weekday", "Jodi"]].dropna()
+    X_jodi = df_jodi[["Prev_Open", "Prev_Close", "Weekday"]]
+    y_jodi = df_jodi["Jodi"]
+    model_jodi = train_model(X_jodi, y_jodi)
+    jodi_vals = []
+    if model_jodi:
+        jodi_probs = model_jodi.predict_proba(X_pred)[0]
+        jodi_classes = model_jodi.classes_
+        top_jodis = [jodi_classes[i] for i in np.argsort(jodi_probs)[-10:][::-1]]
+        jodi_vals = top_jodis
 
-# --- Train Jodi Prediction ---
-def train_and_predict_jodi(df, market):
-    df_market = df[df["Market"] == market].copy()
-    if df_market.shape[0] < 6:
-        return []
-
-    df_market["Weekday"] = df_market["Date"].dt.weekday
-    df_market["Jodi"] = df_market["Open"].astype(str).str.zfill(1) + df_market["Close"].astype(str).str.zfill(1)
-    df_market = df_market.dropna(subset=["Jodi"])
-    df_market = df_market.sort_values("Date").copy()
-    df_market["Prev_Jodi"] = df_market["Jodi"].shift(1)
-    df_market = df_market.dropna(subset=["Prev_Jodi"])
-
-    X = df_market[["Weekday"]]
-    y = df_market["Jodi"]
-
-    model = train_model(X, y)
-    if model is None:
-        return []
-
-    X_pred = pd.DataFrame([{"Weekday": (datetime.now() + timedelta(days=1)).weekday()}])
-    probs = model.predict_proba(X_pred)[0]
-    classes = model.classes_
-
-    top_jodis = [classes[i] for i in np.argsort(probs)[-10:][::-1]]
-    return top_jodis
+    return open_vals, close_vals, jodi_vals
 
 # --- Main ---
 def main():
@@ -135,11 +121,9 @@ def main():
     full_msg = f"<b>Tomorrow's Predictions ({tomorrow}):</b>\n"
 
     for market in MARKETS:
-        open_vals, close_vals = train_and_predict_open_close(df, market)
-        jodis = train_and_predict_jodi(df, market)
-
+        open_vals, close_vals, jodis = train_and_predict(df, market)
         if not open_vals or not close_vals or not jodis:
-            full_msg += f"\n<b>{market}</b>\n<i>Not enough data for prediction</i>\n"
+            full_msg += f"\n<b>{market}</b>\n<i>Not enough data</i>\n"
             continue
 
         open_digits = [str(patti_to_digit(val)) for val in open_vals]
