@@ -37,6 +37,7 @@ today = datetime.now().strftime("%d/%m/%Y")
 today_actuals = df[df["Date"] == today]
 
 matched = []
+messages = []
 
 for _, row in pred_df.iterrows():
     market = row['Market']
@@ -47,27 +48,16 @@ for _, row in pred_df.iterrows():
 
     actual = today_actuals[today_actuals['Market'] == market]
     if actual.empty:
-        matched.append({
-            "Market": market,
-            "Date": today,
-            "Open_Pred": ','.join(predicted_opens),
-            "Open_Act": "Pending",
-            "Close_Pred": ','.join(predicted_closes),
-            "Close_Act": "Pending",
-            "Jodi_Pred": ','.join(predicted_jodis),
-            "Jodi_Act": "Pending",
-            "Open_Match": "Pending",
-            "Close_Match": "Pending",
-            "Jodi_Match": "Pending",
-            "Patti_Match": "Pending",
-            "Model": row.get('Model', 'N/A')
-        })
-        continue
+        continue  # No result yet
 
     actual_row = actual.iloc[0]
     actual_open = str(actual_row['Open']).strip()
     actual_close = str(actual_row['Close']).strip()
     actual_jodi = str(actual_row['Jodi']).strip().zfill(2)
+
+    if actual_open == '' or actual_close == '' or actual_jodi == '':
+        continue  # Incomplete result, skip
+
     actual_patti = actual_open + actual_jodi[0] + actual_close
 
     open_match = actual_open in predicted_opens
@@ -75,6 +65,7 @@ for _, row in pred_df.iterrows():
     jodi_match = actual_jodi in predicted_jodis
     patti_match = actual_patti in predicted_pattis
 
+    # Log the result
     matched.append({
         "Market": market,
         "Date": today,
@@ -91,21 +82,24 @@ for _, row in pred_df.iterrows():
         "Model": row.get('Model', 'N/A')
     })
 
-# Save to log
-log_df = pd.DataFrame(matched)
-log_df.to_csv(ACCURACY_LOG, mode='a', header=not os.path.exists(ACCURACY_LOG), index=False)
-
-# Send Telegram summary
-summary = []
-for row in matched:
-    summary.append(
-        f"<b>{row['Market']}</b>\n"
-        f"<b>Open:</b> {row['Open_Pred']} vs {row['Open_Act']} ({'✔' if row['Open_Match'] == True else '✘' if row['Open_Match'] == False else 'Pending'})\n"
-        f"<b>Close:</b> {row['Close_Pred']} vs {row['Close_Act']} ({'✔' if row['Close_Match'] == True else '✘' if row['Close_Match'] == False else 'Pending'})\n"
-        f"<b>Jodi:</b> {row['Jodi_Pred']} vs {row['Jodi_Act']} ({'✔' if row['Jodi_Match'] == True else '✘' if row['Jodi_Match'] == False else 'Pending'})\n"
-        f"<b>Patti Match:</b> {'✔' if row['Patti_Match'] == True else '✘' if row['Patti_Match'] == False else 'Pending'}"
+    # Send summary for this market
+    messages.append(
+        f"<b>{market}</b>\n"
+        f"<b>Open:</b> {','.join(predicted_opens)} vs {actual_open} ({'✔' if open_match else '✘'})\n"
+        f"<b>Close:</b> {','.join(predicted_closes)} vs {actual_close} ({'✔' if close_match else '✘'})\n"
+        f"<b>Jodi:</b> {','.join(predicted_jodis)} vs {actual_jodi} ({'✔' if jodi_match else '✘'})\n"
+        f"<b>Patti Match:</b> {'✔' if patti_match else '✘'}"
     )
 
-final_message = "<b>Today's Prediction Accuracy:</b>\n\n" + "\n\n".join(summary)
-send_telegram_message(final_message)
-print("Telegram summary sent.")
+# Save logs
+if matched:
+    log_df = pd.DataFrame(matched)
+    log_df.to_csv(ACCURACY_LOG, mode='a', header=not os.path.exists(ACCURACY_LOG), index=False)
+
+# Send message only if any result was found
+if messages:
+    final_message = "<b>Market Result Matched:</b>\n\n" + "\n\n".join(messages)
+    send_telegram_message(final_message)
+    print("Telegram message sent.")
+else:
+    print("No new market result available yet.")
