@@ -11,7 +11,7 @@ warnings.filterwarnings("ignore")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "7121966371:AAEKHVrsqLRswXg64-6Nf3nid-Mbmlmmw5M")
 CHAT_ID = os.getenv("CHAT_ID", "7621883960")
 MARKETS = ["Time Bazar", "Milan Day", "Rajdhani Day", "Kalyan", "Milan Night", "Rajdhani Night", "Main Bazar"]
-DATA_FILE = "default_satta_data.csv"
+DATA_FILE = "satta_data.csv"
 
 # --- Telegram ---
 def send_telegram_message(message):
