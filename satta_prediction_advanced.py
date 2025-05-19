@@ -11,7 +11,7 @@ warnings.filterwarnings("ignore")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "7121966371:AAEKHVrsqLRswXg64-6Nf3nid-Mbmlmmw5M")
 CHAT_ID = os.getenv("CHAT_ID", "7621883960")
 MARKETS = ["Time Bazar", "Milan Day", "Rajdhani Day", "Kalyan", "Milan Night", "Rajdhani Night", "Main Bazar"]
-DATA_FILE = "enhanced_satta_data.csv"
+DATA_FILE = "default_satta_data.csv"
 
 # --- Telegram ---
 def send_telegram_message(message):
@@ -21,9 +21,8 @@ def send_telegram_message(message):
 # --- Load Data ---
 def load_data():
     df = pd.read_csv(DATA_FILE)
-    df.columns = df.columns.str.strip()
     df["Market"] = df["Market"].astype(str).str.strip()
-    df["Date"] = pd.to_datetime(df["Date"], dayfirst=True, errors="coerce")
+    df["Date"] = pd.to_datetime(df["Date"], errors="coerce", dayfirst=True)
     df = df.dropna(subset=["Date", "Market", "Open", "Close"])
     df["Open"] = pd.to_numeric(df["Open"], errors="coerce")
     df["Close"] = pd.to_numeric(df["Close"], errors="coerce")
@@ -56,7 +55,7 @@ def generate_pattis(open_vals, close_vals):
             continue
     return list(pattis)[:4]
 
-# --- Model Training ---
+# --- Model Trainer ---
 def train_model(X, y):
     if len(X) < 5:
         return None
@@ -64,10 +63,10 @@ def train_model(X, y):
     model.fit(X, y)
     return model
 
-# --- Prediction Logic ---
+# --- Train and Predict ---
 def train_and_predict(df, market):
     df_market = df[df["Market"] == market].copy()
-    if df_market.empty or len(df_market) < 5:
+    if df_market.shape[0] < 6:
         return None, None
 
     df_market = engineer_features(df_market)
@@ -82,33 +81,31 @@ def train_and_predict(df, market):
     y_open = df_market["Open"].astype(int)
     y_close = df_market["Close"].astype(int)
 
-    try:
-        model_open = train_model(X, y_open)
-        model_close = train_model(X, y_close)
-
-        if model_open is None or model_close is None:
-            return None, None
-
-        X_pred = pd.DataFrame([{
-            "Prev_Open": last_row["Open"],
-            "Prev_Close": last_row["Close"],
-            "Weekday": weekday
-        }])
-
-        open_probs = model_open.predict_proba(X_pred)[0]
-        close_probs = model_close.predict_proba(X_pred)[0]
-
-        open_classes = model_open.classes_
-        close_classes = model_close.classes_
-
-        open_vals = [open_classes[i] for i in np.argsort(open_probs)[-2:][::-1]]
-        close_vals = [close_classes[i] for i in np.argsort(close_probs)[-2:][::-1]]
-
-        return open_vals, close_vals
-
-    except Exception as e:
-        print(f"{market} - Error: {e}")
+    if len(X) != len(y_open) or len(X) != len(y_close):
         return None, None
+
+    model_open = train_model(X, y_open)
+    model_close = train_model(X, y_close)
+
+    if model_open is None or model_close is None:
+        return None, None
+
+    X_pred = pd.DataFrame([{
+        "Prev_Open": last_row["Open"],
+        "Prev_Close": last_row["Close"],
+        "Weekday": weekday
+    }])
+
+    open_probs = model_open.predict_proba(X_pred)[0]
+    close_probs = model_close.predict_proba(X_pred)[0]
+
+    open_classes = model_open.classes_
+    close_classes = model_close.classes_
+
+    open_vals = [open_classes[i] for i in np.argsort(open_probs)[-2:][::-1]]
+    close_vals = [close_classes[i] for i in np.argsort(close_probs)[-2:][::-1]]
+
+    return open_vals, close_vals
 
 # --- Main ---
 def main():
@@ -129,7 +126,6 @@ def main():
 
         full_msg += (
             f"\n<b>{market}</b>\n"
-            f"<code>{tomorrow}</code>\n"
             f"<b>Open:</b> {', '.join(open_digits)}\n"
             f"<b>Close:</b> {', '.join(close_digits)}\n"
             f"<b>Jodi:</b> {', '.join(jodis)}\n"
