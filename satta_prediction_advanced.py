@@ -10,8 +10,8 @@ import warnings
 warnings.filterwarnings("ignore")
 
 # --- Config ---
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "YOUR_TOKEN")
-CHAT_ID = os.getenv("CHAT_ID", "YOUR_CHAT_ID")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "7121966371:AAEKHVrsqLRswXg64-6Nf3nid-Mbmlmmw5M")
+CHAT_ID = os.getenv("CHAT_ID", "7621883960")
 MARKETS = [
     "Time Bazar", "Milan Day", "Rajdhani Day",
     "Kalyan", "Milan Night", "Rajdhani Night", "Main Bazar"
