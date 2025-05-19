@@ -5,7 +5,7 @@ import requests
 
 # Constants
 CSV_FILE = "satta_data.csv"
-PRED_FILE = "today_predictions.csv"
+PRED_FILE = "today_ml_predictions.csv"
 ACCURACY_LOG = "accuracy_log.csv"
 
 TELEGRAM_BOT_TOKEN = "7121966371:AAEKHVrsqLRswXg64-6Nf3nid-Mbmlmmw5M"
