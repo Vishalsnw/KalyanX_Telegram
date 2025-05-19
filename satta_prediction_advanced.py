@@ -7,7 +7,6 @@ from sklearn.model_selection import train_test_split
 import warnings
 warnings.filterwarnings("ignore")
 
-# Telegram credentials
 TELEGRAM_TOKEN = "7121966371:AAEKHVrsqLRswXg64-6Nf3nid-Mbmlmmw5M"
 CHAT_ID = "7621883960"
 
@@ -28,28 +27,21 @@ def load_data():
     df["Open"] = pd.to_numeric(df["Open"], errors="coerce")
     df["Close"] = pd.to_numeric(df["Close"], errors="coerce")
     df = df.dropna(subset=["Open", "Close"])
-
-    print("Loaded rows after cleaning:", len(df))
-    print("Last date in data:", df["Date"].max())
-    print("Market counts:\n", df["Market"].value_counts())
     return df
 
 def engineer_features(df_market):
     df_market = df_market.sort_values("Date").copy()
-
     df_market["Prev_Open"] = df_market["Open"].shift(1)
     df_market["Prev_Close"] = df_market["Close"].shift(1)
     df_market["Weekday"] = df_market["Date"].dt.weekday
-
     df_market = df_market.iloc[1:]
-
-    df_market = df_market[pd.to_numeric(df_market["Prev_Open"], errors='coerce').notnull()]
-    df_market = df_market[pd.to_numeric(df_market["Prev_Close"], errors='coerce').notnull()]
-
     return df_market
 
-def generate_jodis(open_vals, close_vals):
-    return list(set([f"{o}{c}"[-2:] for o in open_vals for c in close_vals]))[:10]
+def patti_to_digit(patti):
+    return sum(int(d) for d in str(int(patti)).zfill(3)) % 10
+
+def generate_jodis(open_digits, close_digits):
+    return list(set([f"{o}{c}"[-2:] for o in open_digits for c in close_digits]))[:10]
 
 def generate_pattis(open_vals, close_vals):
     pattis = set()
@@ -63,15 +55,9 @@ def generate_pattis(open_vals, close_vals):
 
 def train_and_predict(df, market):
     df_market = df[df["Market"] == market].copy()
-
-    print(f"\n--- {market} ---")
-    print("Data points available:", len(df_market))
-
     df_market = engineer_features(df_market)
-    print(f"{market} - usable after engineering: {len(df_market)} rows")
 
     if len(df_market) < 20:
-        print("Not enough data after feature engineering.")
         return None, None
 
     tomorrow = df_market["Date"].max() + timedelta(days=1)
@@ -107,12 +93,8 @@ def train_and_predict(df, market):
         open_vals = [open_classes[i] for i in np.argsort(open_probs)[-2:][::-1]]
         close_vals = [close_classes[i] for i in np.argsort(close_probs)[-2:][::-1]]
 
-        print("Predicted Open:", open_vals)
-        print("Predicted Close:", close_vals)
-
         return open_vals, close_vals
-    except Exception as e:
-        print(f"{market} prediction error: {e}")
+    except:
         return None, None
 
 def main():
@@ -126,20 +108,22 @@ def main():
             full_message += f"\n<b>{market}</b>\n<i>Prediction Failed or Not Enough Data</i>\n"
             continue
 
-        jodis = generate_jodis(open_vals, close_vals)
+        # Convert patti to digit
+        open_digits = [str(patti_to_digit(val)) for val in open_vals]
+        close_digits = [str(patti_to_digit(val)) for val in close_vals]
+
+        jodis = generate_jodis(open_digits, close_digits)
         pattis = generate_pattis(open_vals, close_vals)
 
         full_message += (
             f"\n<b>{market}</b>\n"
             f"<code>{tomorrow}</code>\n"
-            f"<b>Open:</b> {', '.join(map(str, open_vals))}\n"
-            f"<b>Close:</b> {', '.join(map(str, close_vals))}\n"
+            f"<b>Open:</b> {', '.join(open_digits)}\n"
+            f"<b>Close:</b> {', '.join(close_digits)}\n"
             f"<b>Jodi:</b> {', '.join(jodis)}\n"
             f"<b>Patti:</b> {', '.join(pattis)}\n"
         )
 
-    print("\n=== Telegram Message ===\n")
-    print(full_message)
     send_telegram_message(full_message)
 
 if __name__ == "__main__":
