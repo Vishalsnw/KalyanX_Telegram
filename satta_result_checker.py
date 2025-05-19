@@ -30,7 +30,7 @@ if not os.path.exists(PRED_FILE):
 
 # Load data
 df = pd.read_csv(CSV_FILE)
-df["Date"] = df["Date"].astype(str)  # Ensure string format
+df["Date"] = df["Date"].astype(str)
 
 pred_df = pd.read_csv(PRED_FILE)
 today = datetime.now().strftime("%d/%m/%Y")
@@ -40,18 +40,21 @@ matched = []
 
 for _, row in pred_df.iterrows():
     market = row['Market']
-    pred_jodi = str(row['Jodi']).zfill(2)
+    predicted_opens = [x.strip() for x in str(row.get('Open', '')).split(',')]
+    predicted_closes = [x.strip() for x in str(row.get('Close', '')).split(',')]
+    predicted_jodis = [x.strip().zfill(2) for x in str(row.get('Jodis', '')).split(',')]
+    predicted_pattis = [x.strip() for x in str(row.get('Pattis', '')).split(',')]
 
     actual = today_actuals[today_actuals['Market'] == market]
     if actual.empty:
         matched.append({
             "Market": market,
             "Date": today,
-            "Open_Pred": row['Open'],
+            "Open_Pred": ','.join(predicted_opens),
             "Open_Act": "Pending",
-            "Close_Pred": row['Close'],
+            "Close_Pred": ','.join(predicted_closes),
             "Close_Act": "Pending",
-            "Jodi_Pred": pred_jodi,
+            "Jodi_Pred": ','.join(predicted_jodis),
             "Jodi_Act": "Pending",
             "Open_Match": "Pending",
             "Close_Match": "Pending",
@@ -62,22 +65,25 @@ for _, row in pred_df.iterrows():
         continue
 
     actual_row = actual.iloc[0]
-    open_match = str(row['Open']) == str(actual_row['Open'])
-    close_match = str(row['Close']) == str(actual_row['Close'])
-    jodi_match = pred_jodi == str(actual_row['Jodi']).zfill(2)
-    predicted_pattis = [p.strip() for p in str(row.get('Patti', '')).split(',')]
-    full_patti = actual_row['Open'] + actual_row['Jodi'][0] + actual_row['Close']
-    patti_match = full_patti in predicted_pattis
+    actual_open = str(actual_row['Open']).strip()
+    actual_close = str(actual_row['Close']).strip()
+    actual_jodi = str(actual_row['Jodi']).strip().zfill(2)
+    actual_patti = actual_open + actual_jodi[0] + actual_close
+
+    open_match = actual_open in predicted_opens
+    close_match = actual_close in predicted_closes
+    jodi_match = actual_jodi in predicted_jodis
+    patti_match = actual_patti in predicted_pattis
 
     matched.append({
         "Market": market,
         "Date": today,
-        "Open_Pred": row['Open'],
-        "Open_Act": actual_row['Open'],
-        "Close_Pred": row['Close'],
-        "Close_Act": actual_row['Close'],
-        "Jodi_Pred": pred_jodi,
-        "Jodi_Act": actual_row['Jodi'],
+        "Open_Pred": ','.join(predicted_opens),
+        "Open_Act": actual_open,
+        "Close_Pred": ','.join(predicted_closes),
+        "Close_Act": actual_close,
+        "Jodi_Pred": ','.join(predicted_jodis),
+        "Jodi_Act": actual_jodi,
         "Open_Match": open_match,
         "Close_Match": close_match,
         "Jodi_Match": jodi_match,
@@ -89,7 +95,7 @@ for _, row in pred_df.iterrows():
 log_df = pd.DataFrame(matched)
 log_df.to_csv(ACCURACY_LOG, mode='a', header=not os.path.exists(ACCURACY_LOG), index=False)
 
-# Send Telegram
+# Send Telegram summary
 summary = []
 for row in matched:
     summary.append(
