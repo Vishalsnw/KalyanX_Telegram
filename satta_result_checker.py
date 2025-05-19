@@ -6,7 +6,7 @@ from datetime import datetime
 from bs4 import BeautifulSoup
 
 # Constants
-CSV_FILE = "enhanced_satta_data.csv"
+CSV_FILE = "satta_data.csv"
 PRED_FILE = "today_predictions.csv"
 ACCURACY_LOG = "accuracy_log.csv"
 
@@ -62,7 +62,7 @@ def parse_table(url, market):
                             'Date': date,
                             'Market': market,
                             'Open': parse_cell(o),
-                            'Jodi': parse_cell(j),
+                            'Jodi': parse_cell(j).zfill(2),
                             'Close': parse_cell(c)
                         })
         return results
@@ -80,7 +80,6 @@ def enrich_data(df):
     df["reverse_jodi"] = df["Jodi"].apply(lambda x: str(x).zfill(2)[::-1])
     df["is_holiday"] = False
 
-    # prev_jodi_distance per market
     enhanced = []
     for market in df["Market"].unique():
         mkt_df = df[df["Market"] == market].sort_values("Date").copy()
@@ -91,7 +90,7 @@ def enrich_data(df):
 # Step 1: Load existing data
 existing_df = pd.read_csv(CSV_FILE) if os.path.exists(CSV_FILE) else pd.DataFrame(columns=["Date", "Market"])
 
-# Step 2: Fetch full results from all markets
+# Step 2: Fetch and append new data
 all_new_data = []
 
 for market, url in MARKETS.items():
@@ -112,9 +111,9 @@ else:
     final_df.to_csv(CSV_FILE, index=False)
     print("Updated enhanced_satta_data.csv")
 
-# Step 3: Accuracy check for today (only if prediction file exists)
+# Step 3: Accuracy Check
 today_str = datetime.today().strftime("%d/%m/%Y")
-today_actuals = enriched_df[enriched_df['Date'] == today_str] if not enriched_df.empty else pd.DataFrame()
+today_actuals = final_df[final_df["Date"] == today_str] if not final_df.empty else pd.DataFrame()
 
 if not os.path.exists(PRED_FILE):
     print("Prediction file not found. Skipping accuracy check.")
@@ -134,10 +133,13 @@ else:
         if actual.empty:
             continue
         actual_row = actual.iloc[0]
-        open_match = row['Open'] == actual_row['Open']
-        close_match = row['Close'] == actual_row['Close']
+        open_match = str(row['Open']) == str(actual_row['Open'])
+        close_match = str(row['Close']) == str(actual_row['Close'])
         jodi_match = pred_jodi == str(actual_row['Jodi']).zfill(2)
-        patti_match = any(p in row['Patti'] for p in [actual_row['Open'] + actual_row['Jodi'][0] + actual_row['Close']])
+        predicted_pattis = [p.strip() for p in str(row.get('Patti', '')).split(',')]
+        full_patti = actual_row['Open'] + actual_row['Jodi'][0] + actual_row['Close']
+        patti_match = full_patti in predicted_pattis
+
         matched.append({
             "Market": market,
             "Date": today_str,
@@ -151,7 +153,7 @@ else:
             "Close_Match": close_match,
             "Jodi_Match": jodi_match,
             "Patti_Match": patti_match,
-            "Model": row['Model']
+            "Model": row.get('Model', 'N/A')
         })
 
     if matched:
