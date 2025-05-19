@@ -23,6 +23,7 @@ def send_telegram_message(message):
 # --- Load Data ---
 def load_data():
     df = pd.read_csv(DATA_FILE)
+    df["Market"] = df["Market"].astype(str).str.strip()
     df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
     df = df.dropna(subset=["Date", "Market", "Open", "Close"])
     df["Open"] = pd.to_numeric(df["Open"], errors="coerce")
@@ -39,7 +40,7 @@ def engineer_features(df_market):
     df["Jodi"] = df["Open"].astype(int).astype(str) + df["Close"].astype(int).astype(str)
     df["Patti_Open"] = df["Open"].apply(lambda x: str(int(x)).zfill(3))
     df["Patti_Close"] = df["Close"].apply(lambda x: str(int(x)).zfill(3))
-    df = df.dropna()
+    df = df.dropna(subset=["Prev_Open", "Prev_Close"])
     return df
 
 # --- Utility Functions ---
@@ -71,12 +72,17 @@ def train_model(X, y):
 
 def train_and_predict(df, market):
     df_market = df[df["Market"] == market].copy()
+    print(f"{market} - Total rows before features: {len(df_market)}")
+
+    if df_market.empty:
+        print(f"{market} - No data available")
+        return None, None, None, None
+
     df_market = engineer_features(df_market)
+    print(f"{market} - Rows after feature engineering: {len(df_market)}")
 
-    print(f"{market} - Rows after cleaning: {len(df_market)}")
-
-    # Lowered threshold from 30 to 10
     if len(df_market) < 10:
+        print(f"{market} - Not enough rows after feature engineering")
         return None, None, None, None
 
     tomorrow = df_market["Date"].max() + timedelta(days=1)
@@ -87,7 +93,6 @@ def train_and_predict(df, market):
     y_open = df_market["Open"].astype(int)
     y_close = df_market["Close"].astype(int)
 
-    # Check if X and y lengths match
     if len(X) != len(y_open) or len(X) != len(y_close):
         print(f"{market} - X and y length mismatch")
         return None, None, None, None
@@ -121,14 +126,14 @@ def train_and_predict(df, market):
         return None, None, None, None
 
 # --- Main ---
-# --- Main ---
 def main():
     df = load_data()
+    print("Markets in dataset:", df["Market"].unique())
     tomorrow = (datetime.now() + timedelta(days=1)).strftime("%d/%m/%Y")
     full_msg = f"<b>Tomorrow's Predictions ({tomorrow}):</b>\n"
 
     for market in MARKETS:
-        open_vals, close_vals, _, _ = train_and_predict(df, market)  # FIXED unpacking 4 values
+        open_vals, close_vals, _, _ = train_and_predict(df, market)
         if not open_vals or not close_vals:
             full_msg += f"\n<b>{market}</b>\n<i>Prediction Failed or Not Enough Data</i>\n"
             continue
