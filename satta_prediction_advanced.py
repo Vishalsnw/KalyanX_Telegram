@@ -121,13 +121,14 @@ def train_and_predict(df, market):
         return None, None, None, None
 
 # --- Main ---
+# --- Main ---
 def main():
     df = load_data()
     tomorrow = (datetime.now() + timedelta(days=1)).strftime("%d/%m/%Y")
     full_msg = f"<b>Tomorrow's Predictions ({tomorrow}):</b>\n"
 
     for market in MARKETS:
-        open_vals, close_vals = train_and_predict(df, market)
+        open_vals, close_vals, _, _ = train_and_predict(df, market)  # FIXED unpacking 4 values
         if not open_vals or not close_vals:
             full_msg += f"\n<b>{market}</b>\n<i>Prediction Failed or Not Enough Data</i>\n"
             continue
