@@ -12,6 +12,7 @@ TELEGRAM_TOKEN = "7121966371:AAEKHVrsqLRswXg64-6Nf3nid-Mbmlmmw5M"
 CHAT_ID = "7621883960"
 MARKETS = ["Time Bazar", "Milan Day", "Rajdhani Day", "Kalyan", "Milan Night", "Rajdhani Night", "Main Bazar"]
 DATA_FILE = "satta_data.csv"
+PRED_FILE = "today_ml_prediction.csv"
 
 # --- Telegram ---
 def send_telegram_message(message):
@@ -53,7 +54,6 @@ def generate_pattis(open_vals, close_vals):
             continue
     return list(pattis)[:4]
 
-# --- Model Trainer ---
 def train_model(X, y):
     if len(X) < 5:
         return None
@@ -61,7 +61,6 @@ def train_model(X, y):
     model.fit(X, y)
     return model
 
-# --- Train & Predict ---
 def train_and_predict(df, market):
     df_market = df[df["Market"] == market].copy()
     if df_market.shape[0] < 6:
@@ -75,7 +74,6 @@ def train_and_predict(df, market):
     tomorrow = df_market["Date"].max() + timedelta(days=1)
     weekday = tomorrow.weekday()
 
-    # Train Open/Close
     X = df_market[["Prev_Open", "Prev_Close", "Weekday"]]
     y_open = df_market["Open"].astype(int)
     y_close = df_market["Close"].astype(int)
@@ -100,7 +98,6 @@ def train_and_predict(df, market):
     open_vals = [open_classes[i] for i in np.argsort(open_probs)[-2:][::-1]]
     close_vals = [close_classes[i] for i in np.argsort(close_probs)[-2:][::-1]]
 
-    # --- Jodi Model ---
     df_jodi = df_market[["Prev_Open", "Prev_Close", "Weekday", "Jodi"]].dropna()
     X_jodi = df_jodi[["Prev_Open", "Prev_Close", "Weekday"]]
     y_jodi = df_jodi["Jodi"]
@@ -114,12 +111,18 @@ def train_and_predict(df, market):
 
     return open_vals, close_vals, jodi_vals
 
+# --- Main ---
 def main():
     df = load_data()
     tomorrow = (datetime.now() + timedelta(days=1)).strftime("%d/%m/%Y")
     full_msg = f"<b>Tomorrow's Predictions ({tomorrow}):</b>\n"
 
-    predictions = []  # collect rows for CSV
+    try:
+        df_existing = pd.read_csv(PRED_FILE)
+    except FileNotFoundError:
+        df_existing = pd.DataFrame()
+
+    new_rows = []
 
     for market in MARKETS:
         open_vals, close_vals, jodis = train_and_predict(df, market)
@@ -131,27 +134,34 @@ def main():
         close_digits = [str(patti_to_digit(val)) for val in close_vals]
         pattis = generate_pattis(open_vals, close_vals)
 
-        # Add to message
         full_msg += (
             f"\n<b>{market}</b>\n"
             f"<b>Open:</b> {', '.join(open_digits)}\n"
             f"<b>Close:</b> {', '.join(close_digits)}\n"
-            f"<b>Jodi:</b> {', '.join(jodis)}\n"
             f"<b>Patti:</b> {', '.join(pattis)}\n"
+            f"<b>Jodi:</b> {', '.join(jodis)}\n"
         )
 
-        # Save to prediction list
-        predictions.append({
+        new_rows.append({
             "Market": market,
             "Date": tomorrow,
-            "Open_Pred": "|".join(open_digits),
-            "Close_Pred": "|".join(close_digits),
-            "Jodi_Pred": "|".join(jodis),
-            "Patti_Pred": "|".join(pattis)
+            "Open": ", ".join(open_digits),
+            "Close": ", ".join(close_digits),
+            "Pattis": ", ".join(pattis),
+            "Jodis": ", ".join(jodis)
         })
 
-    # Save all predictions to CSV (overwrite mode)
-    pd.DataFrame(predictions).to_csv("today_ml_prediction.csv", index=False)
+    # Remove existing entries for same date and market
+    for row in new_rows:
+        df_existing = df_existing[~(
+            (df_existing['Market'] == row['Market']) & 
+            (df_existing['Date'] == row['Date'])
+        )]
 
-    # Send telegram message
+    df_combined = pd.concat([df_existing, pd.DataFrame(new_rows)], ignore_index=True)
+    df_combined.to_csv(PRED_FILE, index=False)
+
     send_telegram_message(full_msg)
+
+if __name__ == "__main__":
+    main()
