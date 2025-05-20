@@ -34,6 +34,7 @@ jobs:
         run: |
           git config --global user.email "bot@example.com"
           git config --global user.name "GitHub Bot"
+          if [ -f satta_data.csv ]; then git add satta_data.csv; fi
           if [ -f enhanced_satta_data.csv ]; then git add enhanced_satta_data.csv; fi
           if [ -f accuracy_log.csv ]; then git add accuracy_log.csv; fi
           git diff --cached --quiet || (
