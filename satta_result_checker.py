@@ -4,7 +4,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 import os
 
-# Files and constants
+# Constants and Files
 CSV_FILE = "satta_data.csv"
 PRED_FILE = "today_ml_prediction.csv"
 ACCURACY_LOG = "accuracy_log.csv"
@@ -127,14 +127,13 @@ for _, row in pred_df.iterrows():
         continue
 
     actual_row = actual.iloc[0]
-    ao, ac, aj = actual_row['Open'], actual_row['Close'], actual_row['Jodi']
+    ao, ac, aj = str(actual_row['Open']), str(actual_row['Close']), str(actual_row['Jodi'])
 
     if not ao or not ac or not aj or len(aj) < 1:
         print(f"Skipping {market}: Incomplete actual data -> Open: {ao}, Jodi: {aj}, Close: {ac}")
         continue
 
-    ap = ao + aj[0] + ac  # Patti construction
-
+    ap = ao + aj[0] + ac
     open_match = ao in pred_open
     close_match = ac in pred_close
     jodi_match = aj in pred_jodi
@@ -158,7 +157,6 @@ for _, row in pred_df.iterrows():
         f"<b>Patti Match:</b> {'✔' if patti_match else '✘'}"
     )
 
-# Save and notify
 if matched:
     pd.DataFrame(matched).to_csv(ACCURACY_LOG, mode='a', header=not os.path.exists(ACCURACY_LOG), index=False)
 
