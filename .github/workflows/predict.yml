@@ -14,6 +14,7 @@ jobs:
         uses: actions/checkout@v3
         with:
           persist-credentials: true
+          fetch-depth: 0  # important for push
 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -28,15 +29,15 @@ jobs:
 
       - name: Ensure accuracy_log.csv exists
         run: |
-          [ -f accuracy_log.csv ] || echo "Market,Date,Open_Pred,Open_Act,Close_Pred,Close_Act,Jodi_Pred,Jodi_Act,Open_Match,Close_Match,Jodi_Match,Patti_Match,Model" > accuracy_log.csv
+          if [ ! -f accuracy_log.csv ]; then
+            echo "Market,Date,Open_Pred,Open_Act,Close_Pred,Close_Act,Jodi_Pred,Jodi_Act,Open_Match,Close_Match,Jodi_Match,Patti_Match,Model" > accuracy_log.csv
+          fi
 
       - name: Commit prediction and accuracy logs
         run: |
           git config --global user.email "bot@example.com"
           git config --global user.name "GitHub Bot"
-          if [ -f prediction_log.csv ]; then git add prediction_log.csv; fi
-          if [ -f accuracy_log.csv ]; then git add accuracy_log.csv; fi
-          git diff --cached --quiet || (
-            git commit -m "Auto update predictions and accuracy log"
-            git push
-          )
+          git add today_ml_prediction.csv || true
+          git add accuracy_log.csv || true
+          git commit -m "Auto update predictions and accuracy log" || echo "Nothing to commit"
+          git push
