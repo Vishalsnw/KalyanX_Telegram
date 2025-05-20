@@ -8742,7 +8742,8 @@ Date,Market,Open,Jodi,Close
 20/05/2025,Time Bazar,123,67,458
 20/05/2025,Milan Day,380,12,345
 20/05/2025,Rajdhani Day,238,37,160
-20/05/2025,Kalyan,190,00,145
+20/05/2025,Kalyan,190,0,145
 19/05/2025,Milan Night,589,29,199
-19/05/2025,Rajdhani Night,299,04,149
+19/05/2025,Rajdhani Night,299,4,149
 19/05/2025,Main Bazar,166,34,130
+20/05/2025,Milan Night,780,56,123
