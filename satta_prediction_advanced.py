@@ -114,11 +114,12 @@ def train_and_predict(df, market):
 
     return open_vals, close_vals, jodi_vals
 
-# --- Main ---
 def main():
     df = load_data()
     tomorrow = (datetime.now() + timedelta(days=1)).strftime("%d/%m/%Y")
     full_msg = f"<b>Tomorrow's Predictions ({tomorrow}):</b>\n"
+
+    predictions = []  # collect rows for CSV
 
     for market in MARKETS:
         open_vals, close_vals, jodis = train_and_predict(df, market)
@@ -130,6 +131,7 @@ def main():
         close_digits = [str(patti_to_digit(val)) for val in close_vals]
         pattis = generate_pattis(open_vals, close_vals)
 
+        # Add to message
         full_msg += (
             f"\n<b>{market}</b>\n"
             f"<b>Open:</b> {', '.join(open_digits)}\n"
@@ -138,7 +140,18 @@ def main():
             f"<b>Patti:</b> {', '.join(pattis)}\n"
         )
 
-    send_telegram_message(full_msg)
+        # Save to prediction list
+        predictions.append({
+            "Market": market,
+            "Date": tomorrow,
+            "Open_Pred": "|".join(open_digits),
+            "Close_Pred": "|".join(close_digits),
+            "Jodi_Pred": "|".join(jodis),
+            "Patti_Pred": "|".join(pattis)
+        })
 
-if __name__ == "__main__":
-    main()
+    # Save all predictions to CSV (overwrite mode)
+    pd.DataFrame(predictions).to_csv("today_ml_prediction.csv", index=False)
+
+    # Send telegram message
+    send_telegram_message(full_msg)
