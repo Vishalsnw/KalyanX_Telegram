@@ -8,6 +8,7 @@ import os
 CSV_FILE = "satta_data.csv"
 PRED_FILE = "today_ml_prediction.csv"
 ACCURACY_LOG = "accuracy_log.csv"
+SENT_MSG_FILE = "sent_messages.csv"
 HEADERS = {"User-Agent": "Mozilla/5.0"}
 TELEGRAM_BOT_TOKEN = "7121966371:AAEKHVrsqLRswXg64-6Nf3nid-Mbmlmmw5M"
 CHAT_ID = "7621883960"
@@ -72,6 +73,14 @@ try:
 except:
     df = pd.DataFrame(columns=['Date', 'Market', 'Open', 'Jodi', 'Close'])
     existing = set()
+
+# Load sent message log
+try:
+    sent_log = pd.read_csv(SENT_MSG_FILE)
+    sent_set = set(zip(sent_log['Date'], sent_log['Market']))
+except:
+    sent_log = pd.DataFrame(columns=['Date', 'Market'])
+    sent_set = set()
 
 new_rows = []
 
@@ -149,13 +158,16 @@ for _, row in pred_df.iterrows():
         "Model": row.get('Model', 'N/A')
     })
 
-    messages.append(
-        f"<b>{market}</b>\n"
-        f"<b>Open:</b> {','.join(pred_open)} vs {ao} ({'✔' if open_match else '✘'})\n"
-        f"<b>Close:</b> {','.join(pred_close)} vs {ac} ({'✔' if close_match else '✘'})\n"
-        f"<b>Jodi:</b> {','.join(pred_jodi)} vs {aj} ({'✔' if jodi_match else '✘'})\n"
-        f"<b>Patti Match:</b> {'✔' if patti_match else '✘'}"
-    )
+    if (today, market) not in sent_set:
+        messages.append(
+            f"<b>{market}</b>\n"
+            f"<b>Open:</b> {','.join(pred_open)} vs {ao} ({'✔' if open_match else '✘'})\n"
+            f"<b>Close:</b> {','.join(pred_close)} vs {ac} ({'✔' if close_match else '✘'})\n"
+            f"<b>Jodi:</b> {','.join(pred_jodi)} vs {aj} ({'✔' if jodi_match else '✘'})\n"
+            f"<b>Patti Match:</b> {'✔' if patti_match else '✘'}"
+        )
+        sent_set.add((today, market))
+        sent_log = pd.concat([sent_log, pd.DataFrame([{'Date': today, 'Market': market}])], ignore_index=True)
 
 if matched:
     pd.DataFrame(matched).to_csv(ACCURACY_LOG, mode='a', header=not os.path.exists(ACCURACY_LOG), index=False)
@@ -163,6 +175,7 @@ if matched:
 if messages:
     full_msg = "<b>Market Result Matched:</b>\n\n" + "\n\n".join(messages)
     send_telegram_message(full_msg)
+    sent_log.to_csv(SENT_MSG_FILE, index=False)
     print("Telegram message sent.")
 else:
     print("No new market result available yet.")
