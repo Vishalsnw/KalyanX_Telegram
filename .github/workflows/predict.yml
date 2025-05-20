@@ -2,19 +2,41 @@ name: Daily Prediction
 
 on:
   schedule:
-    - cron: '45 18 * * *' # 12:15 AM IST
+    - cron: '45 18 * * *'  # 12:15 AM IST
   workflow_dispatch:
 
 jobs:
   run-prediction:
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout repo
+        uses: actions/checkout@v3
+        with:
+          persist-credentials: true
+
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
+
       - name: Install dependencies
         run: pip install -r requirements.txt
+
       - name: Run prediction script
         run: python satta_prediction_advanced.py
+
+      - name: Ensure accuracy_log.csv exists
+        run: |
+          [ -f accuracy_log.csv ] || echo "Market,Date,Open_Pred,Open_Act,Close_Pred,Close_Act,Jodi_Pred,Jodi_Act,Open_Match,Close_Match,Jodi_Match,Patti_Match,Model" > accuracy_log.csv
+
+      - name: Commit prediction and accuracy logs
+        run: |
+          git config --global user.email "bot@example.com"
+          git config --global user.name "GitHub Bot"
+          if [ -f prediction_log.csv ]; then git add prediction_log.csv; fi
+          if [ -f accuracy_log.csv ]; then git add accuracy_log.csv; fi
+          git diff --cached --quiet || (
+            git commit -m "Auto update predictions and accuracy log"
+            git push
+          )
