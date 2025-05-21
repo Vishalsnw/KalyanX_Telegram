@@ -142,11 +142,12 @@ for _, row in pred_df.iterrows():
         print(f"Skipping {market}: Incomplete actual data -> Open: {ao}, Jodi: {aj}, Close: {ac}")
         continue
 
-    ap = ao + aj[0] + ac
+    actual_patti = str(actual_row.get('Patti', '')).strip()
+
     open_match = ao in pred_open
     close_match = ac in pred_close
     jodi_match = aj in pred_jodi
-    patti_match = ap in pred_patti
+    patti_match = actual_patti in pred_patti
 
     matched.append({
         "Market": market, "Date": today,
