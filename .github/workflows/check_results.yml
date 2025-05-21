@@ -3,7 +3,7 @@ name: Check Results
 on:
   schedule:
     - cron: '*/5 * * * *'  # Run every 5 minutes
-  workflow_dispatch:       # Also allow manual run
+  workflow_dispatch:       # Manual run option
 
 jobs:
   run-checker:
@@ -13,7 +13,7 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v3
         with:
-          persist-credentials: true  # Needed for push to work
+          persist-credentials: true
 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -23,21 +23,27 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run result checker
+      - name: Run result checker script
         run: python satta_result_checker.py
 
-      - name: Ensure accuracy_log.csv exists
+      - name: Ensure required CSV files exist
         run: |
-          [ -f accuracy_log.csv ] || echo "Market,Date,Open_Pred,Open_Act,Close_Pred,Close_Act,Jodi_Pred,Jodi_Act,Open_Match,Close_Match,Jodi_Match,Patti_Match,Model" > accuracy_log.csv
+          touch satta_data.csv
+          touch accuracy_log.csv
+          touch sent_messages.csv
+          echo "Ensured data files exist"
 
-      - name: Commit updated CSV if changed
+      - name: Commit updated CSV files if changed
         run: |
           git config --global user.email "bot@example.com"
           git config --global user.name "GitHub Bot"
-          if [ -f satta_data.csv ]; then git add satta_data.csv; fi
-          if [ -f enhanced_satta_data.csv ]; then git add enhanced_satta_data.csv; fi
-          if [ -f accuracy_log.csv ]; then git add accuracy_log.csv; fi
+
+          git add satta_data.csv || true
+          git add accuracy_log.csv || true
+          git add sent_messages.csv || true
+          git add today_ml_prediction.csv || true
+
           git diff --cached --quiet || (
-            git commit -m "Auto update results CSV"
+            git commit -m "Auto update CSV logs"
             git push
           )
