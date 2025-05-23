@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 # Load from .env
 load_dotenv()
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 # Constants and Files
 CSV_FILE = "satta_data.csv"
