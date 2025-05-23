@@ -4,12 +4,15 @@ import telegram
 import os
 from datetime import datetime, timedelta
 from sklearn.ensemble import RandomForestClassifier
+from dotenv import load_dotenv
 import warnings
+
 warnings.filterwarnings("ignore")
+load_dotenv()
 
 # --- Config ---
-TELEGRAM_TOKEN = "7121966371:AAEKHVrsqLRswXg64-6Nf3nid-Mbmlmmw5M"
-CHAT_ID = "7621883960"
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 MARKETS = ["Time Bazar", "Milan Day", "Rajdhani Day", "Kalyan", "Milan Night", "Rajdhani Night", "Main Bazar"]
 DATA_FILE = "satta_data.csv"
 PRED_FILE = "today_ml_prediction.csv"
@@ -151,7 +154,6 @@ def main():
             "Jodis": ", ".join(jodis)
         })
 
-    # Remove existing entries for same date and market
     for row in new_rows:
         df_existing = df_existing[~(
             (df_existing['Market'] == row['Market']) & 
