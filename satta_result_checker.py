@@ -3,6 +3,12 @@ from bs4 import BeautifulSoup
 import pandas as pd
 from datetime import datetime, timedelta
 import os
+from dotenv import load_dotenv
+
+# Load from .env
+load_dotenv()
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
 
 # Constants and Files
 CSV_FILE = "satta_data.csv"
@@ -10,8 +16,6 @@ PRED_FILE = "today_ml_prediction.csv"
 ACCURACY_LOG = "accuracy_log.csv"
 SENT_MSG_FILE = "sent_messages.csv"
 HEADERS = {"User-Agent": "Mozilla/5.0"}
-TELEGRAM_BOT_TOKEN = "7121966371:AAEKHVrsqLRswXg64-6Nf3nid-Mbmlmmw5M"
-CHAT_ID = "7621883960"
 
 MARKETS = {
     "Time Bazar": "https://dpbossattamatka.com/panel-chart-record/time-bazar.php",
@@ -66,7 +70,7 @@ def get_latest_result(url):
     except Exception as e:
         return {'status': f'error: {e}'}
 
-# Load existing results
+# Load existing
 try:
     df = pd.read_csv(CSV_FILE)
     existing = set(zip(df['Date'], df['Market']))
@@ -74,7 +78,6 @@ except:
     df = pd.DataFrame(columns=['Date', 'Market', 'Open', 'Jodi', 'Close'])
     existing = set()
 
-# Load sent message log
 try:
     sent_log = pd.read_csv(SENT_MSG_FILE)
     sent_set = set(zip(sent_log['Date'], sent_log['Market']))
@@ -84,7 +87,6 @@ except:
 
 new_rows = []
 
-# Scrape latest results
 for market, url in MARKETS.items():
     print(f"Checking {market}...")
     result = get_latest_result(url)
@@ -103,7 +105,6 @@ for market, url in MARKETS.items():
     else:
         print(f"  ⚠️ Skipped {market}: {result.get('status')}")
 
-# Append new results
 if new_rows:
     df = pd.concat([df, pd.DataFrame(new_rows)], ignore_index=True)
     df.to_csv(CSV_FILE, index=False)
@@ -111,7 +112,6 @@ if new_rows:
 else:
     print("\n✅ No new results found")
 
-# Prediction match
 if not os.path.exists(PRED_FILE):
     print("Prediction file not found. Skipping match check.")
     exit()
@@ -137,22 +137,22 @@ for _, row in pred_df.iterrows():
 
     actual_row = actual.iloc[0]
     ao, ac, aj = str(actual_row['Open']), str(actual_row['Close']), str(actual_row['Jodi'])
+    actual_patti = str(actual_row.get('Patti', '')).strip()
 
-    if not ao or not ac or not aj or len(aj) < 1:
+    if not ao or not ac or not aj or len(aj) != 2:
         print(f"Skipping {market}: Incomplete actual data -> Open: {ao}, Jodi: {aj}, Close: {ac}")
         continue
 
-    actual_patti = str(actual_row.get('Patti', '')).strip()
-
-    open_match = ao in pred_open
-    close_match = ac in pred_close
+    # Updated matching logic
+    open_match = aj[0] in pred_open
+    close_match = aj[1] in pred_close
     jodi_match = aj in pred_jodi
     patti_match = actual_patti in pred_patti
 
     matched.append({
         "Market": market, "Date": today,
-        "Open_Pred": ','.join(pred_open), "Open_Act": ao,
-        "Close_Pred": ','.join(pred_close), "Close_Act": ac,
+        "Open_Pred": ','.join(pred_open), "Open_Act": aj[0],
+        "Close_Pred": ','.join(pred_close), "Close_Act": aj[1],
         "Jodi_Pred": ','.join(pred_jodi), "Jodi_Act": aj,
         "Open_Match": open_match, "Close_Match": close_match,
         "Jodi_Match": jodi_match, "Patti_Match": patti_match,
@@ -162,8 +162,8 @@ for _, row in pred_df.iterrows():
     if (today, market) not in sent_set:
         messages.append(
             f"<b>{market}</b>\n"
-            f"<b>Open:</b> {','.join(pred_open)} vs {ao} ({'✔' if open_match else '✘'})\n"
-            f"<b>Close:</b> {','.join(pred_close)} vs {ac} ({'✔' if close_match else '✘'})\n"
+            f"<b>Open:</b> {','.join(pred_open)} vs {aj[0]} ({'✔' if open_match else '✘'})\n"
+            f"<b>Close:</b> {','.join(pred_close)} vs {aj[1]} ({'✔' if close_match else '✘'})\n"
             f"<b>Jodi:</b> {','.join(pred_jodi)} vs {aj} ({'✔' if jodi_match else '✘'})\n"
             f"<b>Patti Match:</b> {'✔' if patti_match else '✘'}"
         )
