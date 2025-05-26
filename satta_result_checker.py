@@ -5,12 +5,11 @@ from datetime import datetime, timedelta
 import os
 from dotenv import load_dotenv
 
-# Load from .env
+# Load .env
 load_dotenv()
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-# Constants and Files
 CSV_FILE = "satta_data.csv"
 PRED_FILE = "today_ml_prediction.csv"
 ACCURACY_LOG = "accuracy_log.csv"
@@ -70,7 +69,7 @@ def get_latest_result(url):
     except Exception as e:
         return {'status': f'error: {e}'}
 
-# Load existing
+# Load actual result CSV
 try:
     df = pd.read_csv(CSV_FILE)
     existing = set(zip(df['Date'], df['Market']))
@@ -78,6 +77,7 @@ except:
     df = pd.DataFrame(columns=['Date', 'Market', 'Open', 'Jodi', 'Close'])
     existing = set()
 
+# Load sent log
 try:
     sent_log = pd.read_csv(SENT_MSG_FILE)
     sent_set = set(zip(sent_log['Date'], sent_log['Market']))
@@ -85,8 +85,8 @@ except:
     sent_log = pd.DataFrame(columns=['Date', 'Market'])
     sent_set = set()
 
+# Collect new results
 new_rows = []
-
 for market, url in MARKETS.items():
     print(f"Checking {market}...")
     result = get_latest_result(url)
@@ -112,12 +112,22 @@ if new_rows:
 else:
     print("\n✅ No new results found")
 
+# Prediction file check
 if not os.path.exists(PRED_FILE):
     print("Prediction file not found. Skipping match check.")
     exit()
 
 df["Date"] = df["Date"].astype(str)
 pred_df = pd.read_csv(PRED_FILE)
+
+# Filter prediction for latest date
+if 'Date' in pred_df.columns:
+    pred_df['Date'] = pd.to_datetime(pred_df['Date'], errors='coerce').dt.strftime("%d/%m/%Y")
+    latest_pred_date = pred_df['Date'].dropna().max()
+    pred_df = pred_df[pred_df['Date'] == latest_pred_date]
+else:
+    latest_pred_date = "N/A"
+
 today = datetime.now().strftime("%d/%m/%Y")
 today_actuals = df[df["Date"] == today]
 
@@ -137,17 +147,17 @@ for _, row in pred_df.iterrows():
 
     actual_row = actual.iloc[0]
     ao, ac, aj = str(actual_row['Open']), str(actual_row['Close']), str(actual_row['Jodi'])
-    actual_patti = str(actual_row.get('Patti', '')).strip()
+    actual_patti_raw = str(actual_row.get('Patti', '')).strip()
+    actual_pattis = [x.strip() for x in actual_patti_raw.split(',') if x.strip()]
 
     if not ao or not ac or not aj or len(aj) != 2:
         print(f"Skipping {market}: Incomplete actual data -> Open: {ao}, Jodi: {aj}, Close: {ac}")
         continue
 
-    # Updated matching logic
     open_match = aj[0] in pred_open
     close_match = aj[1] in pred_close
     jodi_match = aj in pred_jodi
-    patti_match = actual_patti in pred_patti
+    patti_match = any(p in pred_patti for p in actual_pattis)
 
     matched.append({
         "Market": market, "Date": today,
