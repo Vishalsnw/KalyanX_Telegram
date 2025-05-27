@@ -2,25 +2,45 @@ import pandas as pd
 import numpy as np
 import telegram
 import os
+import requests
+import json
 from datetime import datetime, timedelta
 from sklearn.ensemble import RandomForestClassifier
-from dotenv import load_dotenv
 import warnings
 
 warnings.filterwarnings("ignore")
-load_dotenv()
 
 # --- Config ---
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+TELEGRAM_TOKEN = "8050429062:AAGjX5t7poexZWjIEuMijQ1bVOJELqgdlmc"
+CHAT_ID = "7621883960"
 MARKETS = ["Time Bazar", "Milan Day", "Rajdhani Day", "Kalyan", "Milan Night", "Rajdhani Night", "Main Bazar"]
 DATA_FILE = "satta_data.csv"
 PRED_FILE = "today_ml_prediction.csv"
+GPT_API_URL = "https://copilot5.p.rapidapi.com/copilot"
+GPT_HEADERS = {
+    "Content-Type": "application/json",
+    "x-rapidapi-host": "copilot5.p.rapidapi.com",
+    "x-rapidapi-key": "a531e727f3msh281ef1f076f7139p198608jsn82cfb1c7b6d0"
+}
 
 # --- Telegram ---
 def send_telegram_message(message):
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
     bot.send_message(chat_id=CHAT_ID, text=message, parse_mode=telegram.ParseMode.HTML)
+
+# --- GPT Helper ---
+def ask_gpt(prompt):
+    payload = {
+        "message": prompt,
+        "conversation_id": None,
+        "mode": "CHAT",
+        "markdown": False
+    }
+    try:
+        res = requests.post(GPT_API_URL, headers=GPT_HEADERS, json=payload, timeout=10)
+        return res.json().get("text", "").strip()
+    except:
+        return ""
 
 # --- Load Data ---
 def load_data():
@@ -31,8 +51,7 @@ def load_data():
     df["Open"] = pd.to_numeric(df["Open"], errors="coerce")
     df["Close"] = pd.to_numeric(df["Close"], errors="coerce")
     df["Jodi"] = df["Jodi"].astype(str).str.zfill(2).str[-2:]
-    df = df.dropna()
-    return df
+    return df.dropna()
 
 # --- Feature Engineering ---
 def engineer_features(df_market):
@@ -43,7 +62,6 @@ def engineer_features(df_market):
     df = df.dropna(subset=["Prev_Open", "Prev_Close"])
     return df
 
-# --- Utilities ---
 def patti_to_digit(patti):
     return sum(int(d) for d in str(int(patti)).zfill(3)) % 10
 
@@ -63,6 +81,15 @@ def train_model(X, y):
     model = RandomForestClassifier(n_estimators=100)
     model.fit(X, y)
     return model
+
+def gpt_feature_boost(last_row, weekday):
+    prompt = (
+        f"Improve Satta Matka prediction using last Open={last_row['Open']}, "
+        f"Close={last_row['Close']}, Weekday={weekday}. Generate best features and give 2 probable Open, "
+        f"2 probable Close, and 4 Jodi."
+    )
+    reply = ask_gpt(prompt)
+    return reply
 
 def train_and_predict(df, market):
     df_market = df[df["Market"] == market].copy()
@@ -109,8 +136,23 @@ def train_and_predict(df, market):
     if model_jodi:
         jodi_probs = model_jodi.predict_proba(X_pred)[0]
         jodi_classes = model_jodi.classes_
-        top_jodis = [jodi_classes[i] for i in np.argsort(jodi_probs)[-10:][::-1]]
-        jodi_vals = top_jodis
+        jodi_vals = [jodi_classes[i] for i in np.argsort(jodi_probs)[-4:][::-1]]
+
+    # --- GPT Feature Rerank + Voting ---
+    gpt_output = gpt_feature_boost(last_row, weekday)
+    if gpt_output:
+        lines = gpt_output.splitlines()
+        g_open, g_close, g_jodi = [], [], []
+        for line in lines:
+            if "Open" in line:
+                g_open = [x.strip() for x in line.split(":")[-1].split(",") if x.strip().isdigit()]
+            elif "Close" in line:
+                g_close = [x.strip() for x in line.split(":")[-1].split(",") if x.strip().isdigit()]
+            elif "Jodi" in line:
+                g_jodi = [x.strip() for x in line.split(":")[-1].split(",") if x.strip().isdigit()]
+        open_vals = list(dict.fromkeys(open_vals + g_open))[:2]
+        close_vals = list(dict.fromkeys(close_vals + g_close))[:2]
+        jodi_vals = list(dict.fromkeys(jodi_vals + g_jodi))[:4]
 
     return open_vals, close_vals, jodi_vals
 
