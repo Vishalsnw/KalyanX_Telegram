@@ -1,23 +1,22 @@
 import pandas as pd
 import numpy as np
+import requests
 import telegram
-import os
 from datetime import datetime, timedelta
 from sklearn.ensemble import RandomForestClassifier
-from dotenv import load_dotenv
-import requests
 import warnings
 
 warnings.filterwarnings("ignore")
-load_dotenv()
 
 # --- Config ---
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+TELEGRAM_TOKEN = "8050429062:AAGjX5t7poexZWjIEuMijQ1bVOJELqgdlmc"
+CHAT_ID = "7621883960"
+COPILOT_API_KEY = "a531e727f3msh281ef1f076f7139p198608jsn82cfb1c7b6d0"
+COPILOT_URL = "https://copilot5.p.rapidapi.com/copilot"
+
 MARKETS = ["Time Bazar", "Milan Day", "Rajdhani Day", "Kalyan", "Milan Night", "Rajdhani Night", "Main Bazar"]
 DATA_FILE = "satta_data.csv"
 PRED_FILE = "today_ml_prediction.csv"
-COPILOT_API_KEY = "a531e727f3msh281ef1f076f7139p198608jsn82cfb1c7b6d0"
 
 # --- Telegram ---
 def send_telegram_message(message):
@@ -35,6 +34,24 @@ def load_data():
     df["Jodi"] = df["Jodi"].astype(str).str.zfill(2).str[-2:]
     df = df.dropna()
     return df
+
+# --- AI Enhancer ---
+def enhance_features_with_gpt(df_market):
+    sample = df_market.tail(10).to_dict(orient="records")
+    prompt = f"Improve prediction accuracy for this satta data using ML. Suggest new features: {sample}"
+    headers = {
+        "Content-Type": "application/json",
+        "x-rapidapi-host": "copilot5.p.rapidapi.com",
+        "x-rapidapi-key": COPILOT_API_KEY
+    }
+    data = {"message": prompt, "conversation_id": None, "mode": "CHAT", "markdown": True}
+    try:
+        res = requests.post(COPILOT_URL, json=data, headers=headers)
+        if res.status_code == 200:
+            return res.json().get("text", "")
+    except:
+        return ""
+    return ""
 
 # --- Feature Engineering ---
 def engineer_features(df_market):
@@ -66,37 +83,16 @@ def train_model(X, y):
     model.fit(X, y)
     return model
 
-# --- Copilot API ---
-def enhance_with_copilot(open_vals, close_vals, jodi_vals):
-    message = {
-        "message": f"Given Open: {open_vals}, Close: {close_vals}, Jodi: {jodi_vals}. Suggest improved predictions to increase satta model accuracy.",
-        "conversation_id": None,
-        "mode": "CHAT",
-        "markdown": False
-    }
-    headers = {
-        "Content-Type": "application/json",
-        "x-rapidapi-host": "copilot5.p.rapidapi.com",
-        "x-rapidapi-key": COPILOT_API_KEY
-    }
-    try:
-        res = requests.post("https://copilot5.p.rapidapi.com/copilot", json=message, headers=headers, timeout=10)
-        if res.status_code == 200:
-            data = res.json()
-            suggestion = data.get("response", {}).get("text", "")
-            return suggestion
-    except Exception:
-        pass
-    return ""
-
 def train_and_predict(df, market):
     df_market = df[df["Market"] == market].copy()
     if df_market.shape[0] < 6:
-        return None, None, None, ""
+        return None, None, None, "Not enough data"
 
     df_market = engineer_features(df_market)
+    gpt_enhancement = enhance_features_with_gpt(df_market)
+
     if len(df_market) < 5:
-        return None, None, None, ""
+        return None, None, None, "Not enough rows after features"
 
     last_row = df_market.iloc[-1]
     tomorrow = df_market["Date"].max() + timedelta(days=1)
@@ -110,9 +106,14 @@ def train_and_predict(df, market):
     model_close = train_model(X, y_close)
 
     if model_open is None or model_close is None:
-        return None, None, None, ""
+        return None, None, None, "Model training failed"
 
-    X_pred = pd.DataFrame([{ "Prev_Open": last_row["Open"], "Prev_Close": last_row["Close"], "Weekday": weekday }])
+    X_pred = pd.DataFrame([{
+        "Prev_Open": last_row["Open"],
+        "Prev_Close": last_row["Close"],
+        "Weekday": weekday
+    }])
+
     open_probs = model_open.predict_proba(X_pred)[0]
     close_probs = model_close.predict_proba(X_pred)[0]
     open_classes = model_open.classes_
@@ -132,9 +133,8 @@ def train_and_predict(df, market):
         top_jodis = [jodi_classes[i] for i in np.argsort(jodi_probs)[-10:][::-1]]
         jodi_vals = top_jodis
 
-    suggestion = enhance_with_copilot(open_vals, close_vals, jodi_vals)
-
-    return open_vals, close_vals, jodi_vals, suggestion
+    explanation = f"AI Suggestion:\nTop Open: {open_vals}, Top Close: {close_vals}\n{gpt_enhancement}"
+    return open_vals, close_vals, jodi_vals, explanation
 
 # --- Main ---
 def main():
@@ -150,7 +150,7 @@ def main():
     new_rows = []
 
     for market in MARKETS:
-        open_vals, close_vals, jodis, ai_suggestion = train_and_predict(df, market)
+        open_vals, close_vals, jodis, ai_tip = train_and_predict(df, market)
         if not open_vals or not close_vals or not jodis:
             full_msg += f"\n<b>{market}</b>\n<i>Not enough data</i>\n"
             continue
@@ -165,7 +165,7 @@ def main():
             f"<b>Close:</b> {', '.join(close_digits)}\n"
             f"<b>Patti:</b> {', '.join(pattis)}\n"
             f"<b>Jodi:</b> {', '.join(jodis)}\n"
-            f"<i>AI Suggestion:</i> {ai_suggestion[:100]}...\n"
+            f"<b>{ai_tip}</b>\n"
         )
 
         new_rows.append({
@@ -190,4 +190,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-  
+                      
