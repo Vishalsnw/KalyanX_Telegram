@@ -10,7 +10,7 @@ warnings.filterwarnings("ignore")
 
 # --- Config ---
 TELEGRAM_TOKEN = "8050429062:AAGjX5t7poexZWjIEuMijQ1bVOJELqgdlmc"
-CHAT_ID = "7621883960"
+CHAT_ID = "1002573892631"
 GPT_API_KEY = "a531e727f3msh281ef1f076f7139p198608jsn82cfb1c7b6d0"
 GPT_URL = "https://open-ai21.p.rapidapi.com/conversationllama"
 
