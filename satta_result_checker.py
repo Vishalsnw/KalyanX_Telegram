@@ -134,6 +134,9 @@ today_actuals = df[df["Date"] == today]
 matched = []
 messages = []
 
+def colored(value, is_match):
+    return f"<span style='color:{'green' if is_match else 'red'}'>{value} {'✔' if is_match else '✘'}</span>"
+
 for _, row in pred_df.iterrows():
     market = row['Market']
     pred_open = [x.strip() for x in str(row.get('Open', '')).split(',')]
@@ -159,6 +162,9 @@ for _, row in pred_df.iterrows():
     jodi_match = aj in pred_jodi
     patti_match = any(p in pred_patti for p in actual_pattis)
 
+    if not any([open_match, close_match, jodi_match, patti_match]):
+        continue  # skip this market if nothing matches
+
     matched.append({
         "Market": market, "Date": today,
         "Open_Pred": ','.join(pred_open), "Open_Act": aj[0],
@@ -172,21 +178,23 @@ for _, row in pred_df.iterrows():
     if (today, market) not in sent_set:
         messages.append(
             f"<b>{market}</b>\n"
-            f"<b>Open:</b> {','.join(pred_open)} vs {aj[0]} ({'✔' if open_match else '✘'})\n"
-            f"<b>Close:</b> {','.join(pred_close)} vs {aj[1]} ({'✔' if close_match else '✘'})\n"
-            f"<b>Jodi:</b> {','.join(pred_jodi)} vs {aj} ({'✔' if jodi_match else '✘'})\n"
-            f"<b>Patti Match:</b> {'✔' if patti_match else '✘'}"
+            f"<b>Open:</b> {', '.join(pred_open)} vs {colored(aj[0], open_match)}\n"
+            f"<b>Close:</b> {', '.join(pred_close)} vs {colored(aj[1], close_match)}\n"
+            f"<b>Jodi:</b> {', '.join(pred_jodi)} vs {colored(aj, jodi_match)}\n"
+            f"<b>Patti Match:</b> <span style='color:{'green' if patti_match else 'red'}'>{'✔' if patti_match else '✘'}</span>"
         )
         sent_set.add((today, market))
         sent_log = pd.concat([sent_log, pd.DataFrame([{'Date': today, 'Market': market}])], ignore_index=True)
 
+# Save matched log
 if matched:
     pd.DataFrame(matched).to_csv(ACCURACY_LOG, mode='a', header=not os.path.exists(ACCURACY_LOG), index=False)
 
+# Send Telegram message only if we have matches
 if messages:
-    full_msg = "<b>Market Result Matched:</b>\n\n" + "\n\n".join(messages)
+    full_msg = "<b>✅ Market Match Found:</b>\n\n" + "\n\n".join(messages)
     send_telegram_message(full_msg)
     sent_log.to_csv(SENT_MSG_FILE, index=False)
     print("Telegram message sent.")
 else:
-    print("No new market result available yet.")
+    print("❌ No prediction matched. No message sent.")
