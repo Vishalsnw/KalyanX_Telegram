@@ -11,8 +11,8 @@ warnings.filterwarnings("ignore")
 # --- Config ---
 TELEGRAM_TOKEN = "8050429062:AAGjX5t7poexZWjIEuMijQ1bVOJELqgdlmc"
 CHAT_ID = "7621883960"
-COPILOT_API_KEY = "a531e727f3msh281ef1f076f7139p198608jsn82cfb1c7b6d0"
-COPILOT_URL = "https://copilot5.p.rapidapi.com/copilot"
+GPT_API_KEY = "a531e727f3msh281ef1f076f7139p198608jsn82cfb1c7b6d0"
+GPT_URL = "https://open-ai21.p.rapidapi.com/conversationllama"
 
 MARKETS = ["Time Bazar", "Milan Day", "Rajdhani Day", "Kalyan", "Milan Night", "Rajdhani Night", "Main Bazar"]
 DATA_FILE = "satta_data.csv"
@@ -41,12 +41,12 @@ def enhance_features_with_gpt(df_market):
     prompt = f"Improve prediction accuracy for this satta data using ML. Suggest new features: {sample}"
     headers = {
         "Content-Type": "application/json",
-        "x-rapidapi-host": "copilot5.p.rapidapi.com",
-        "x-rapidapi-key": COPILOT_API_KEY
+        "x-rapidapi-host": "open-ai21.p.rapidapi.com",
+        "x-rapidapi-key": GPT_API_KEY
     }
-    data = {"message": prompt, "conversation_id": None, "mode": "CHAT", "markdown": True}
+    data = {"messages": [{"role": "user", "content": prompt}], "web_access": False}
     try:
-        res = requests.post(COPILOT_URL, json=data, headers=headers)
+        res = requests.post(GPT_URL, json=data, headers=headers)
         if res.status_code == 200:
             return res.json().get("text", "")
     except:
@@ -83,6 +83,7 @@ def train_model(X, y):
     model.fit(X, y)
     return model
 
+# --- ML + GPT Predictor ---
 def train_and_predict(df, market):
     df_market = df[df["Market"] == market].copy()
     if df_market.shape[0] < 6:
@@ -190,4 +191,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-                      
+    
