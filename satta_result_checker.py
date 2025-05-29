@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 import os
 from dotenv import load_dotenv
 
-# Load .env
+# Load environment variables
 load_dotenv()
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
@@ -30,9 +30,11 @@ def send_telegram_message(msg):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": CHAT_ID, "text": msg, "parse_mode": "HTML"}
     try:
-        requests.post(url, data=payload)
+        r = requests.post(url, data=payload)
+        if not r.ok:
+            print("Telegram send error:", r.text)
     except Exception as e:
-        print("Telegram error:", e)
+        print("Telegram exception:", e)
 
 def parse_cell(cell):
     parts = cell.decode_contents().split('<br>')
@@ -69,7 +71,7 @@ def get_latest_result(url):
     except Exception as e:
         return {'status': f'error: {e}'}
 
-# Load actual result CSV
+# Load previous results
 try:
     df = pd.read_csv(CSV_FILE)
     existing = set(zip(df['Date'], df['Market']))
@@ -85,7 +87,7 @@ except:
     sent_log = pd.DataFrame(columns=['Date', 'Market'])
     sent_set = set()
 
-# Collect new results
+# Scrape and collect new results
 new_rows = []
 for market, url in MARKETS.items():
     print(f"Checking {market}...")
@@ -134,8 +136,8 @@ today_actuals = df[df["Date"] == today]
 matched = []
 messages = []
 
-def colored(value, is_match):
-    return f"<span style='color:{'green' if is_match else 'red'}'>{value} {'✔' if is_match else '✘'}</span>"
+def emoji_match(is_match):
+    return '✅' if is_match else '❌'
 
 for _, row in pred_df.iterrows():
     market = row['Market']
@@ -163,7 +165,7 @@ for _, row in pred_df.iterrows():
     patti_match = any(p in pred_patti for p in actual_pattis)
 
     if not any([open_match, close_match, jodi_match, patti_match]):
-        continue  # skip this market if nothing matches
+        continue  # skip if no match
 
     matched.append({
         "Market": market, "Date": today,
@@ -176,13 +178,14 @@ for _, row in pred_df.iterrows():
     })
 
     if (today, market) not in sent_set:
-        messages.append(
+        message = (
             f"<b>{market}</b>\n"
-            f"<b>Open:</b> {', '.join(pred_open)} vs {colored(aj[0], open_match)}\n"
-            f"<b>Close:</b> {', '.join(pred_close)} vs {colored(aj[1], close_match)}\n"
-            f"<b>Jodi:</b> {', '.join(pred_jodi)} vs {colored(aj, jodi_match)}\n"
-            f"<b>Patti Match:</b> <span style='color:{'green' if patti_match else 'red'}'>{'✔' if patti_match else '✘'}</span>"
+            f"<b>Open:</b> {', '.join(pred_open)} vs {aj[0]} {emoji_match(open_match)}\n"
+            f"<b>Close:</b> {', '.join(pred_close)} vs {aj[1]} {emoji_match(close_match)}\n"
+            f"<b>Jodi:</b> {', '.join(pred_jodi)} vs {aj} {emoji_match(jodi_match)}\n"
+            f"<b>Patti:</b> {emoji_match(patti_match)}"
         )
+        messages.append(message)
         sent_set.add((today, market))
         sent_log = pd.concat([sent_log, pd.DataFrame([{'Date': today, 'Market': market}])], ignore_index=True)
 
@@ -190,11 +193,11 @@ for _, row in pred_df.iterrows():
 if matched:
     pd.DataFrame(matched).to_csv(ACCURACY_LOG, mode='a', header=not os.path.exists(ACCURACY_LOG), index=False)
 
-# Send Telegram message only if we have matches
+# Send Telegram message
 if messages:
-    full_msg = "<b>✅ Market Match Found:</b>\n\n" + "\n\n".join(messages)
+    full_msg = "<b>🎯 Market Match Found</b>\n\n" + "\n\n".join(messages)
     send_telegram_message(full_msg)
     sent_log.to_csv(SENT_MSG_FILE, index=False)
-    print("Telegram message sent.")
+    print("📨 Telegram message sent.")
 else:
-    print("❌ No prediction matched. No message sent.")
+    print("❌ No match to send.")
