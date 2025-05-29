@@ -1,200 +1,195 @@
-import requests
-from bs4 import BeautifulSoup
 import pandas as pd
+import numpy as np
+import requests
+import telegram
 from datetime import datetime, timedelta
-import os
+from sklearn.ensemble import RandomForestClassifier
+import warnings
 
-# --- Configuration ---
-TELEGRAM_BOT_TOKEN = "8050429062:AAGjX5t7poexZWjIEuMijQ1bVOJELqgdlmc"
+# --- Config ---
+warnings.filterwarnings("ignore")
+TELEGRAM_TOKEN = "8050429062:AAGjX5t7poexZWjIEuMijQ1bVOJELqgdlmc"
 CHAT_ID = "-1002573892631"
+GPT_API_KEY = "a531e727f3msh281ef1f076f7139p198608jsn82cfb1c7b6d0"
+GPT_URL = "https://open-ai21.p.rapidapi.com/conversationllama"
 
-CSV_FILE = "satta_data.csv"
+MARKETS = ["Time Bazar", "Milan Day", "Rajdhani Day", "Kalyan", "Milan Night", "Rajdhani Night", "Main Bazar"]
+DATA_FILE = "satta_data.csv"
 PRED_FILE = "today_ml_prediction.csv"
-ACCURACY_LOG = "accuracy_log.csv"
-SENT_MSG_FILE = "sent_messages.csv"
-HEADERS = {"User-Agent": "Mozilla/5.0"}
 
-MARKETS = {
-    "Time Bazar": "https://dpbossattamatka.com/panel-chart-record/time-bazar.php",
-    "Milan Day": "https://dpbossattamatka.com/panel-chart-record/milan-day.php",
-    "Rajdhani Day": "https://dpbossattamatka.com/panel-chart-record/rajdhani-day.php",
-    "Kalyan": "https://dpbossattamatka.com/panel-chart-record/kalyan.php",
-    "Milan Night": "https://dpbossattamatka.com/panel-chart-record/milan-night.php",
-    "Rajdhani Night": "https://dpbossattamatka.com/panel-chart-record/rajdhani-night.php",
-    "Main Bazar": "https://dpbossattamatka.com/panel-chart-record/main-bazar.php"
-}
-
-# --- Functions ---
-
-def send_telegram_message(msg):
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {"chat_id": CHAT_ID, "text": msg, "parse_mode": "HTML"}
+# --- Telegram ---
+def send_telegram_message(message):
     try:
-        r = requests.post(url, data=payload)
-        if not r.ok:
-            print("Telegram send error:", r.text)
+        bot = telegram.Bot(token=TELEGRAM_TOKEN)
+        bot.send_message(chat_id=CHAT_ID, text=message, parse_mode=telegram.ParseMode.HTML)
     except Exception as e:
-        print("Telegram exception:", e)
+        print("Telegram Error:", e)
 
-def parse_cell(cell):
-    parts = cell.decode_contents().split('<br>')
-    return ''.join(BeautifulSoup(p, 'html.parser').get_text(strip=True) for p in parts)
+# --- Load Data ---
+def load_data():
+    df = pd.read_csv(DATA_FILE)
+    df["Market"] = df["Market"].astype(str).str.strip()
+    df["Date"] = pd.to_datetime(df["Date"], errors="coerce", dayfirst=True)
+    df = df.dropna(subset=["Date", "Market", "Open", "Close", "Jodi"])
+    df["Open"] = pd.to_numeric(df["Open"], errors="coerce")
+    df["Close"] = pd.to_numeric(df["Close"], errors="coerce")
+    df["Jodi"] = df["Jodi"].astype(str).str.zfill(2).str[-2:]
+    return df.dropna()
 
-def get_latest_result(url):
+# --- AI Enhancer ---
+def enhance_features_with_gpt(df_market):
+    sample = df_market.tail(10).to_dict(orient="records")
+    prompt = f"Improve prediction accuracy for this satta data using ML. Suggest new features: {sample}"
+    headers = {
+        "Content-Type": "application/json",
+        "x-rapidapi-host": "open-ai21.p.rapidapi.com",
+        "x-rapidapi-key": GPT_API_KEY
+    }
+    data = {"messages": [{"role": "user", "content": prompt}], "web_access": False}
     try:
-        res = requests.get(url, headers=HEADERS, timeout=10)
-        res.encoding = 'utf-8'
-        soup = BeautifulSoup(res.text, 'html.parser')
-        for table in soup.find_all("table"):
-            rows = table.find_all("tr")
-            for row in reversed(rows):
-                cols = row.find_all("td")
-                if len(cols) >= 4 and 'to' in cols[0].text:
-                    start_date = cols[0].text.split('to')[0].strip()
-                    try:
-                        base_date = datetime.strptime(start_date, "%d/%m/%Y")
-                    except:
-                        continue
-                    cells = cols[1:]
-                    index = len(cells) // 3 - 1
-                    date = (base_date + timedelta(days=index)).strftime("%d/%m/%Y")
-                    o, j, c = cells[index*3: index*3+3]
-                    if '**' in o.text or '**' in j.text or '**' in c.text:
-                        return {'date': date, 'open': '', 'jodi': '', 'close': '', 'status': 'Not declared'}
-                    return {
-                        'date': date,
-                        'open': parse_cell(o),
-                        'jodi': parse_cell(j),
-                        'close': parse_cell(c),
-                        'status': 'ok'
-                    }
-    except Exception as e:
-        return {'status': f'error: {e}'}
-
-# --- Load previous results ---
-try:
-    df = pd.read_csv(CSV_FILE)
-    existing = set(zip(df['Date'], df['Market']))
-except:
-    df = pd.DataFrame(columns=['Date', 'Market', 'Open', 'Jodi', 'Close'])
-    existing = set()
-
-try:
-    sent_log = pd.read_csv(SENT_MSG_FILE)
-    sent_set = set(zip(sent_log['Date'], sent_log['Market']))
-except:
-    sent_log = pd.DataFrame(columns=['Date', 'Market'])
-    sent_set = set()
-
-# --- Scrape latest results ---
-new_rows = []
-for market, url in MARKETS.items():
-    print(f"Checking {market}...")
-    result = get_latest_result(url)
-    if result.get("status") == "ok":
-        if (result['date'], market) not in existing:
-            print(f"  ➕ New result found: {result['date']} - {market}")
-            new_rows.append({
-                'Date': result['date'],
-                'Market': market,
-                'Open': result['open'],
-                'Jodi': result['jodi'],
-                'Close': result['close']
-            })
+        res = requests.post(GPT_URL, json=data, headers=headers, timeout=10)
+        if res.status_code == 200:
+            return res.json().get("text", "")
         else:
-            print(f"  ✅ Already in CSV: {result['date']} - {market}")
-    else:
-        print(f"  ⚠️ Skipped {market}: {result.get('status')}")
+            return f"GPT Error: Status {res.status_code}"
+    except Exception as e:
+        return f"GPT Error: {str(e)}"
 
-if new_rows:
-    df = pd.concat([df, pd.DataFrame(new_rows)], ignore_index=True)
-    df.to_csv(CSV_FILE, index=False)
-    print(f"\n✅ Appended {len(new_rows)} new rows to {CSV_FILE}")
-else:
-    print("\n✅ No new results found")
+# --- Feature Engineering ---
+def engineer_features(df_market):
+    df = df_market.sort_values("Date").copy()
+    df["Prev_Open"] = df["Open"].shift(1)
+    df["Prev_Close"] = df["Close"].shift(1)
+    df["Weekday"] = df["Date"].dt.weekday
+    return df.dropna(subset=["Prev_Open", "Prev_Close"])
 
-# --- Match against predictions ---
-if not os.path.exists(PRED_FILE):
-    print("Prediction file not found. Skipping match check.")
-    exit()
+# --- Utilities ---
+def patti_to_digit(patti):
+    return sum(int(d) for d in str(int(patti)).zfill(3)) % 10
 
-df["Date"] = df["Date"].astype(str)
-pred_df = pd.read_csv(PRED_FILE)
+def generate_pattis(open_vals, close_vals):
+    pattis = set()
+    for val in open_vals + close_vals:
+        try:
+            base = int(val)
+            pattis.update([str(base + i).zfill(3) for i in range(4)])
+        except:
+            continue
+    return list(pattis)[:4]
 
-if 'Date' in pred_df.columns:
-    pred_df['Date'] = pd.to_datetime(pred_df['Date'], errors='coerce').dt.strftime("%d/%m/%Y")
-    latest_pred_date = pred_df['Date'].dropna().max()
-    pred_df = pred_df[pred_df['Date'] == latest_pred_date]
-else:
-    latest_pred_date = "N/A"
+def train_model(X, y):
+    if len(X) < 5:
+        return None
+    model = RandomForestClassifier(n_estimators=100)
+    model.fit(X, y)
+    return model
 
-today = datetime.now().strftime("%d/%m/%Y")
-today_actuals = df[df["Date"] == today]
+# --- ML + GPT Predictor ---
+def train_and_predict(df, market):
+    df_market = df[df["Market"] == market].copy()
+    if df_market.shape[0] < 6:
+        return None, None, None, "Not enough data"
 
-matched = []
-messages = []
+    df_market = engineer_features(df_market)
+    if len(df_market) < 5:
+        return None, None, None, "Not enough rows after features"
 
-def emoji_match(is_match):
-    return '✅' if is_match else '❌'
+    gpt_enhancement = enhance_features_with_gpt(df_market)
+    last_row = df_market.iloc[-1]
+    tomorrow = df_market["Date"].max() + timedelta(days=1)
+    weekday = tomorrow.weekday()
 
-for _, row in pred_df.iterrows():
-    market = row['Market']
-    pred_open = [x.strip() for x in str(row.get('Open', '')).split(',')]
-    pred_close = [x.strip() for x in str(row.get('Close', '')).split(',')]
-    pred_jodi = [x.strip().zfill(2) for x in str(row.get('Jodis', '')).split(',')]
-    pred_patti = [x.strip() for x in str(row.get('Pattis', '')).split(',')]
+    X = df_market[["Prev_Open", "Prev_Close", "Weekday"]]
+    y_open = df_market["Open"].astype(int)
+    y_close = df_market["Close"].astype(int)
 
-    actual = today_actuals[today_actuals['Market'] == market]
-    if actual.empty:
-        continue
+    model_open = train_model(X, y_open)
+    model_close = train_model(X, y_close)
 
-    actual_row = actual.iloc[0]
-    ao, ac, aj = str(actual_row['Open']), str(actual_row['Close']), str(actual_row['Jodi'])
-    actual_patti_raw = str(actual_row.get('Patti', '')).strip()
-    actual_pattis = [x.strip() for x in actual_patti_raw.split(',') if x.strip()]
+    if model_open is None or model_close is None:
+        return None, None, None, "Model training failed"
 
-    if not ao or not ac or not aj or len(aj) != 2:
-        print(f"Skipping {market}: Incomplete actual data -> Open: {ao}, Jodi: {aj}, Close: {ac}")
-        continue
+    X_pred = pd.DataFrame([{
+        "Prev_Open": last_row["Open"],
+        "Prev_Close": last_row["Close"],
+        "Weekday": weekday
+    }])
 
-    open_match = aj[0] in pred_open
-    close_match = aj[1] in pred_close
-    jodi_match = aj in pred_jodi
-    patti_match = any(p in pred_patti for p in actual_pattis)
+    open_probs = model_open.predict_proba(X_pred)[0]
+    close_probs = model_close.predict_proba(X_pred)[0]
+    open_classes = model_open.classes_
+    close_classes = model_close.classes_
 
-    if not any([open_match, close_match, jodi_match, patti_match]):
-        continue
+    open_vals = [open_classes[i] for i in np.argsort(open_probs)[-2:][::-1]]
+    close_vals = [close_classes[i] for i in np.argsort(close_probs)[-2:][::-1]]
 
-    matched.append({
-        "Market": market, "Date": today,
-        "Open_Pred": ','.join(pred_open), "Open_Act": aj[0],
-        "Close_Pred": ','.join(pred_close), "Close_Act": aj[1],
-        "Jodi_Pred": ','.join(pred_jodi), "Jodi_Act": aj,
-        "Open_Match": open_match, "Close_Match": close_match,
-        "Jodi_Match": jodi_match, "Patti_Match": patti_match,
-        "Model": row.get('Model', 'N/A')
-    })
+    df_jodi = df_market[["Prev_Open", "Prev_Close", "Weekday", "Jodi"]].dropna()
+    X_jodi = df_jodi[["Prev_Open", "Prev_Close", "Weekday"]]
+    y_jodi = df_jodi["Jodi"]
+    model_jodi = train_model(X_jodi, y_jodi)
 
-    if (today, market) not in sent_set:
-        message = (
-            f"<b>{market}</b>\n"
-            f"<b>Open:</b> {', '.join(pred_open)} vs {aj[0]} {emoji_match(open_match)}\n"
-            f"<b>Close:</b> {', '.join(pred_close)} vs {aj[1]} {emoji_match(close_match)}\n"
-            f"<b>Jodi:</b> {', '.join(pred_jodi)} vs {aj} {emoji_match(jodi_match)}\n"
-            f"<b>Patti:</b> {emoji_match(patti_match)}"
+    jodi_vals = []
+    if model_jodi:
+        jodi_probs = model_jodi.predict_proba(X_pred)[0]
+        jodi_classes = model_jodi.classes_
+        top_jodis = [jodi_classes[i] for i in np.argsort(jodi_probs)[-10:][::-1]]
+        jodi_vals = top_jodis
+
+    explanation = f"AI Suggestion:\nTop Open: {open_vals}, Top Close: {close_vals}\n{gpt_enhancement}"
+    return open_vals, close_vals, jodi_vals, explanation
+
+# --- Main ---
+def main():
+    df = load_data()
+    tomorrow = (datetime.now() + timedelta(days=1)).strftime("%d/%m/%Y")
+    full_msg = f"<b>Tomorrow's Predictions ({tomorrow}):</b>\n"
+
+    try:
+        df_existing = pd.read_csv(PRED_FILE)
+    except FileNotFoundError:
+        df_existing = pd.DataFrame()
+
+    new_rows = []
+
+    for market in MARKETS:
+        open_vals, close_vals, jodis, ai_tip = train_and_predict(df, market)
+
+        if not open_vals or not close_vals or not jodis:
+            full_msg += f"\n<b>{market}</b>\n<i>{ai_tip}</i>\n"
+            continue
+
+        open_digits = [str(patti_to_digit(val)) for val in open_vals]
+        close_digits = [str(patti_to_digit(val)) for val in close_vals]
+        pattis = generate_pattis(open_vals, close_vals)
+
+        full_msg += (
+            f"\n<b>{market}</b>\n"
+            f"<b>Open:</b> {', '.join(open_digits)}\n"
+            f"<b>Close:</b> {', '.join(close_digits)}\n"
+            f"<b>Patti:</b> {', '.join(pattis)}\n"
+            f"<b>Jodi:</b> {', '.join(jodis)}\n"
+            f"<i>{ai_tip}</i>\n"
         )
-        messages.append(message)
-        sent_set.add((today, market))
-        sent_log = pd.concat([sent_log, pd.DataFrame([{'Date': today, 'Market': market}])], ignore_index=True)
 
-# --- Save accuracy and send Telegram alert ---
-if matched:
-    pd.DataFrame(matched).to_csv(ACCURACY_LOG, mode='a', header=not os.path.exists(ACCURACY_LOG), index=False)
+        new_rows.append({
+            "Market": market,
+            "Date": tomorrow,
+            "Open": ", ".join(open_digits),
+            "Close": ", ".join(close_digits),
+            "Pattis": ", ".join(pattis),
+            "Jodis": ", ".join(jodis)
+        })
 
-if messages:
-    full_msg = "<b>🎯 Market Match Found</b>\n\n" + "\n\n".join(messages)
+    for row in new_rows:
+        df_existing = df_existing[~(
+            (df_existing['Market'] == row['Market']) &
+            (df_existing['Date'] == row['Date'])
+        )]
+
+    df_combined = pd.concat([df_existing, pd.DataFrame(new_rows)], ignore_index=True)
+    df_combined.to_csv(PRED_FILE, index=False)
+
     send_telegram_message(full_msg)
-    sent_log.to_csv(SENT_MSG_FILE, index=False)
-    print("📨 Telegram message sent.")
-else:
-    print("❌ No match to send.")
+
+if __name__ == "__main__":
+    main()
