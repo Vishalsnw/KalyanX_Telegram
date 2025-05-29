@@ -3,12 +3,10 @@ from bs4 import BeautifulSoup
 import pandas as pd
 from datetime import datetime, timedelta
 import os
-from dotenv import load_dotenv
 
-# Load environment variables
-load_dotenv()
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+# --- Configuration ---
+TELEGRAM_BOT_TOKEN = "8050429062:AAGjX5t7poexZWjIEuMijQ1bVOJELqgdlmc"
+CHAT_ID = "-1002573892631"
 
 CSV_FILE = "satta_data.csv"
 PRED_FILE = "today_ml_prediction.csv"
@@ -25,6 +23,8 @@ MARKETS = {
     "Rajdhani Night": "https://dpbossattamatka.com/panel-chart-record/rajdhani-night.php",
     "Main Bazar": "https://dpbossattamatka.com/panel-chart-record/main-bazar.php"
 }
+
+# --- Functions ---
 
 def send_telegram_message(msg):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -71,7 +71,7 @@ def get_latest_result(url):
     except Exception as e:
         return {'status': f'error: {e}'}
 
-# Load previous results
+# --- Load previous results ---
 try:
     df = pd.read_csv(CSV_FILE)
     existing = set(zip(df['Date'], df['Market']))
@@ -79,7 +79,6 @@ except:
     df = pd.DataFrame(columns=['Date', 'Market', 'Open', 'Jodi', 'Close'])
     existing = set()
 
-# Load sent log
 try:
     sent_log = pd.read_csv(SENT_MSG_FILE)
     sent_set = set(zip(sent_log['Date'], sent_log['Market']))
@@ -87,7 +86,7 @@ except:
     sent_log = pd.DataFrame(columns=['Date', 'Market'])
     sent_set = set()
 
-# Scrape and collect new results
+# --- Scrape latest results ---
 new_rows = []
 for market, url in MARKETS.items():
     print(f"Checking {market}...")
@@ -114,7 +113,7 @@ if new_rows:
 else:
     print("\n✅ No new results found")
 
-# Prediction file check
+# --- Match against predictions ---
 if not os.path.exists(PRED_FILE):
     print("Prediction file not found. Skipping match check.")
     exit()
@@ -122,7 +121,6 @@ if not os.path.exists(PRED_FILE):
 df["Date"] = df["Date"].astype(str)
 pred_df = pd.read_csv(PRED_FILE)
 
-# Filter prediction for latest date
 if 'Date' in pred_df.columns:
     pred_df['Date'] = pd.to_datetime(pred_df['Date'], errors='coerce').dt.strftime("%d/%m/%Y")
     latest_pred_date = pred_df['Date'].dropna().max()
@@ -165,7 +163,7 @@ for _, row in pred_df.iterrows():
     patti_match = any(p in pred_patti for p in actual_pattis)
 
     if not any([open_match, close_match, jodi_match, patti_match]):
-        continue  # skip if no match
+        continue
 
     matched.append({
         "Market": market, "Date": today,
@@ -189,11 +187,10 @@ for _, row in pred_df.iterrows():
         sent_set.add((today, market))
         sent_log = pd.concat([sent_log, pd.DataFrame([{'Date': today, 'Market': market}])], ignore_index=True)
 
-# Save matched log
+# --- Save accuracy and send Telegram alert ---
 if matched:
     pd.DataFrame(matched).to_csv(ACCURACY_LOG, mode='a', header=not os.path.exists(ACCURACY_LOG), index=False)
 
-# Send Telegram message
 if messages:
     full_msg = "<b>🎯 Market Match Found</b>\n\n" + "\n\n".join(messages)
     send_telegram_message(full_msg)
