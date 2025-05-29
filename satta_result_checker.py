@@ -111,10 +111,11 @@ if new_rows:
 else:
     print("\n✅ No new results found")
 
-# --- Check Prediction File ---
+# --- Load Prediction File ---
 if not os.path.exists(PRED_FILE):
     print("Prediction file not found. Sending actuals only.")
     send_actuals_only = True
+    pred_df = pd.DataFrame()
 else:
     pred_df = pd.read_csv(PRED_FILE)
     if 'Date' in pred_df.columns:
@@ -139,6 +140,8 @@ def emoji_match(is_match):
 
 for _, row in today_actuals.iterrows():
     market = row["Market"]
+    if (today, market) in sent_set:
+        continue  # Skip already sent
     ao, aj, ac = str(row["Open"]), str(row["Jodi"]), str(row["Close"])
     if not ao or not aj or not ac or len(aj) != 2:
         continue
@@ -185,8 +188,10 @@ for _, row in today_actuals.iterrows():
             sent_log = pd.concat([sent_log, pd.DataFrame([{'Date': today, 'Market': market}])], ignore_index=True)
         else:
             unmatched_msgs.append(actual_message)
+            sent_log = pd.concat([sent_log, pd.DataFrame([{'Date': today, 'Market': market}])], ignore_index=True)
     else:
         unmatched_msgs.append(actual_message)
+        sent_log = pd.concat([sent_log, pd.DataFrame([{'Date': today, 'Market': market}])], ignore_index=True)
 
 # --- Send Messages ---
 if matched:
