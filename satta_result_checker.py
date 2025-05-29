@@ -24,8 +24,6 @@ MARKETS = {
     "Main Bazar": "https://dpbossattamatka.com/panel-chart-record/main-bazar.php"
 }
 
-# --- Functions ---
-
 def send_telegram_message(msg):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": CHAT_ID, "text": msg, "parse_mode": "HTML"}
@@ -71,7 +69,7 @@ def get_latest_result(url):
     except Exception as e:
         return {'status': f'error: {e}'}
 
-# --- Load previous results ---
+# --- Load Data ---
 try:
     df = pd.read_csv(CSV_FILE)
     existing = set(zip(df['Date'], df['Market']))
@@ -86,7 +84,7 @@ except:
     sent_log = pd.DataFrame(columns=['Date', 'Market'])
     sent_set = set()
 
-# --- Scrape latest results ---
+# --- Scrape and Append New Results ---
 new_rows = []
 for market, url in MARKETS.items():
     print(f"Checking {market}...")
@@ -113,88 +111,91 @@ if new_rows:
 else:
     print("\n✅ No new results found")
 
-# --- Match against predictions ---
+# --- Check Prediction File ---
 if not os.path.exists(PRED_FILE):
-    print("Prediction file not found. Skipping match check.")
-    exit()
-
-df["Date"] = df["Date"].astype(str)
-pred_df = pd.read_csv(PRED_FILE)
-
-if 'Date' in pred_df.columns:
-    pred_df['Date'] = pd.to_datetime(pred_df['Date'], errors='coerce').dt.strftime("%d/%m/%Y")
-    latest_pred_date = pred_df['Date'].dropna().max()
-    pred_df = pred_df[pred_df['Date'] == latest_pred_date]
+    print("Prediction file not found. Sending actuals only.")
+    send_actuals_only = True
 else:
-    latest_pred_date = "N/A"
+    pred_df = pd.read_csv(PRED_FILE)
+    if 'Date' in pred_df.columns:
+        pred_df['Date'] = pd.to_datetime(pred_df['Date'], errors='coerce').dt.strftime("%d/%m/%Y")
+        latest_pred_date = pred_df['Date'].dropna().max()
+        pred_df = pred_df[pred_df['Date'] == latest_pred_date]
+    else:
+        pred_df = pd.DataFrame()
+    send_actuals_only = pred_df.empty
 
+# --- Prepare for Matching ---
+df["Date"] = df["Date"].astype(str)
 today = datetime.now().strftime("%d/%m/%Y")
 today_actuals = df[df["Date"] == today]
 
 matched = []
 messages = []
+unmatched_msgs = []
 
 def emoji_match(is_match):
     return '✅' if is_match else '❌'
 
-for _, row in pred_df.iterrows():
-    market = row['Market']
-    pred_open = [x.strip() for x in str(row.get('Open', '')).split(',')]
-    pred_close = [x.strip() for x in str(row.get('Close', '')).split(',')]
-    pred_jodi = [x.strip().zfill(2) for x in str(row.get('Jodis', '')).split(',')]
-    pred_patti = [x.strip() for x in str(row.get('Pattis', '')).split(',')]
-
-    actual = today_actuals[today_actuals['Market'] == market]
-    if actual.empty:
+for _, row in today_actuals.iterrows():
+    market = row["Market"]
+    ao, aj, ac = str(row["Open"]), str(row["Jodi"]), str(row["Close"])
+    if not ao or not aj or not ac or len(aj) != 2:
         continue
 
-    actual_row = actual.iloc[0]
-    ao, ac, aj = str(actual_row['Open']), str(actual_row['Close']), str(actual_row['Jodi'])
-    actual_patti_raw = str(actual_row.get('Patti', '')).strip()
-    actual_pattis = [x.strip() for x in actual_patti_raw.split(',') if x.strip()]
+    actual_message = (
+        f"<b>{market}</b>\n"
+        f"<b>Open:</b> {ao}\n"
+        f"<b>Close:</b> {ac}\n"
+        f"<b>Jodi:</b> {aj}"
+    )
 
-    if not ao or not ac or not aj or len(aj) != 2:
-        print(f"Skipping {market}: Incomplete actual data -> Open: {ao}, Jodi: {aj}, Close: {ac}")
-        continue
+    pred_row = pred_df[pred_df["Market"] == market]
+    if not pred_row.empty:
+        pr = pred_row.iloc[0]
+        pred_open = [x.strip() for x in str(pr.get("Open", "")).split(",")]
+        pred_close = [x.strip() for x in str(pr.get("Close", "")).split(",")]
+        pred_jodi = [x.strip().zfill(2) for x in str(pr.get("Jodis", "")).split(",")]
+        pred_patti = [x.strip() for x in str(pr.get("Pattis", "")).split(",")]
+        actual_pattis = [x.strip() for x in str(row.get("Patti", "")).split(",") if x.strip()]
 
-    open_match = aj[0] in pred_open
-    close_match = aj[1] in pred_close
-    jodi_match = aj in pred_jodi
-    patti_match = any(p in pred_patti for p in actual_pattis)
+        open_match = aj[0] in pred_open
+        close_match = aj[1] in pred_close
+        jodi_match = aj in pred_jodi
+        patti_match = any(p in pred_patti for p in actual_pattis)
 
-    if not any([open_match, close_match, jodi_match, patti_match]):
-        continue
+        if any([open_match, close_match, jodi_match, patti_match]):
+            msg = (
+                f"<b>{market}</b>\n"
+                f"<b>Open:</b> {', '.join(pred_open)} vs {aj[0]} {emoji_match(open_match)}\n"
+                f"<b>Close:</b> {', '.join(pred_close)} vs {aj[1]} {emoji_match(close_match)}\n"
+                f"<b>Jodi:</b> {', '.join(pred_jodi)} vs {aj} {emoji_match(jodi_match)}\n"
+                f"<b>Patti:</b> {emoji_match(patti_match)}"
+            )
+            messages.append(msg)
+            matched.append({
+                "Market": market, "Date": today,
+                "Open_Pred": ','.join(pred_open), "Open_Act": aj[0],
+                "Close_Pred": ','.join(pred_close), "Close_Act": aj[1],
+                "Jodi_Pred": ','.join(pred_jodi), "Jodi_Act": aj,
+                "Open_Match": open_match, "Close_Match": close_match,
+                "Jodi_Match": jodi_match, "Patti_Match": patti_match,
+                "Model": pr.get("Model", "N/A")
+            })
+            sent_log = pd.concat([sent_log, pd.DataFrame([{'Date': today, 'Market': market}])], ignore_index=True)
+        else:
+            unmatched_msgs.append(actual_message)
+    else:
+        unmatched_msgs.append(actual_message)
 
-    matched.append({
-        "Market": market, "Date": today,
-        "Open_Pred": ','.join(pred_open), "Open_Act": aj[0],
-        "Close_Pred": ','.join(pred_close), "Close_Act": aj[1],
-        "Jodi_Pred": ','.join(pred_jodi), "Jodi_Act": aj,
-        "Open_Match": open_match, "Close_Match": close_match,
-        "Jodi_Match": jodi_match, "Patti_Match": patti_match,
-        "Model": row.get('Model', 'N/A')
-    })
-
-    if (today, market) not in sent_set:
-        message = (
-            f"<b>{market}</b>\n"
-            f"<b>Open:</b> {', '.join(pred_open)} vs {aj[0]} {emoji_match(open_match)}\n"
-            f"<b>Close:</b> {', '.join(pred_close)} vs {aj[1]} {emoji_match(close_match)}\n"
-            f"<b>Jodi:</b> {', '.join(pred_jodi)} vs {aj} {emoji_match(jodi_match)}\n"
-            f"<b>Patti:</b> {emoji_match(patti_match)}"
-        )
-        messages.append(message)
-        sent_set.add((today, market))
-        sent_log = pd.concat([sent_log, pd.DataFrame([{'Date': today, 'Market': market}])], ignore_index=True)
-
-# --- Save accuracy and send Telegram alert ---
+# --- Send Messages ---
 if matched:
     pd.DataFrame(matched).to_csv(ACCURACY_LOG, mode='a', header=not os.path.exists(ACCURACY_LOG), index=False)
+    send_telegram_message("<b>🎯 Match Found</b>\n\n" + "\n\n".join(messages))
 
-if messages:
-    full_msg = "<b>🎯 Market Match Found</b>\n\n" + "\n\n".join(messages)
-    send_telegram_message(full_msg)
-    sent_log.to_csv(SENT_MSG_FILE, index=False)
-    print("📨 Telegram message sent.")
-else:
-    print("❌ No match to send.")
+if unmatched_msgs:
+    send_telegram_message("<b>📊 Today's Results</b>\n\n" + "\n\n".join(unmatched_msgs))
+
+# --- Save Sent Log ---
+sent_log.to_csv(SENT_MSG_FILE, index=False)
+print("📨 Telegram messages sent.")
