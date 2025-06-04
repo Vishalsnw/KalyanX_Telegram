@@ -26,7 +26,7 @@ MARKETS = {
 
 def send_telegram_message(msg):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {"chat_id": CHAT_ID, "text": msg, "parse_mode": "HTML"}
+    payload = {"chat_id": CHAT_ID, "text": msg, "parse_mode": "Markdown"}
     try:
         r = requests.post(url, data=payload)
         if not r.ok:
@@ -69,7 +69,7 @@ def get_latest_result(url):
     except Exception as e:
         return {'status': f'error: {e}'}
 
-# --- Load Data ---
+# --- Load Existing Data ---
 try:
     df = pd.read_csv(CSV_FILE)
     existing = set(zip(df['Date'], df['Market']))
@@ -84,123 +84,86 @@ except:
     sent_log = pd.DataFrame(columns=['Date', 'Market'])
     sent_set = set()
 
-# --- Scrape and Append New Results ---
+# --- Scrape and Append ---
 new_rows = []
 for market, url in MARKETS.items():
-    print(f"Checking {market}...")
     result = get_latest_result(url)
-    if result.get("status") == "ok":
-        if (result['date'], market) not in existing:
-            print(f"  ➕ New result found: {result['date']} - {market}")
-            new_rows.append({
-                'Date': result['date'],
-                'Market': market,
-                'Open': result['open'],
-                'Jodi': result['jodi'],
-                'Close': result['close']
-            })
-        else:
-            print(f"  ✅ Already in CSV: {result['date']} - {market}")
-    else:
-        print(f"  ⚠️ Skipped {market}: {result.get('status')}")
+    if result.get("status") == "ok" and (result['date'], market) not in existing:
+        new_rows.append({
+            'Date': result['date'],
+            'Market': market,
+            'Open': result['open'],
+            'Jodi': result['jodi'],
+            'Close': result['close']
+        })
 
 if new_rows:
     df = pd.concat([df, pd.DataFrame(new_rows)], ignore_index=True)
     df.to_csv(CSV_FILE, index=False)
-    print(f"\n✅ Appended {len(new_rows)} new rows to {CSV_FILE}")
-else:
-    print("\n✅ No new results found")
 
-# --- Load Prediction File ---
-if not os.path.exists(PRED_FILE):
-    print("Prediction file not found. Sending actuals only.")
-    send_actuals_only = True
-    pred_df = pd.DataFrame()
-else:
+# --- Load Predictions ---
+if os.path.exists(PRED_FILE):
     pred_df = pd.read_csv(PRED_FILE)
-    if 'Date' in pred_df.columns:
-        pred_df['Date'] = pd.to_datetime(pred_df['Date'], errors='coerce').dt.strftime("%d/%m/%Y")
-        latest_pred_date = pred_df['Date'].dropna().max()
-        pred_df = pred_df[pred_df['Date'] == latest_pred_date]
-    else:
-        pred_df = pd.DataFrame()
-    send_actuals_only = pred_df.empty
+    pred_df['Date'] = pd.to_datetime(pred_df['Date'], errors='coerce').dt.strftime("%d/%m/%Y")
+    latest_date = pred_df['Date'].dropna().max()
+    pred_df = pred_df[pred_df['Date'] == latest_date]
+else:
+    pred_df = pd.DataFrame()
 
-# --- Prepare for Matching ---
-df["Date"] = df["Date"].astype(str)
+# --- Prepare Messages ---
 today = datetime.now().strftime("%d/%m/%Y")
-today_actuals = df[df["Date"] == today]
-
-matched = []
-messages = []
+today_actuals = df[df['Date'] == today]
+matched_msgs = []
 unmatched_msgs = []
 
-def emoji_match(is_match):
-    return '✅' if is_match else '❌'
+def emoji(b): return "✅" if b else "❌"
+
+def format_card(market, open_act, close_act, jodi_act, pred=None):
+    if pred:
+        pred_open = [x.strip() for x in str(pred.get("Open", "")).split(",")]
+        pred_close = [x.strip() for x in str(pred.get("Close", "")).split(",")]
+        pred_jodi = [x.strip().zfill(2) for x in str(pred.get("Jodis", "")).split(",")]
+        pred_patti = [x.strip() for x in str(pred.get("Pattis", "")).split(",")]
+        act_pattis = [x.strip() for x in str(pred.get("Patti", "")).split(",") if x.strip()]
+
+        open_match = jodi_act[0] in pred_open
+        close_match = jodi_act[1] in pred_close
+        jodi_match = jodi_act in pred_jodi
+        patti_match = any(p in pred_patti for p in act_pattis)
+
+        return (
+            f"\ud83d\udccd *{market}*\n"
+            f"*Open:* {', '.join(pred_open)} vs `{jodi_act[0]}` {emoji(open_match)}\n"
+            f"*Close:* {', '.join(pred_close)} vs `{jodi_act[1]}` {emoji(close_match)}\n"
+            f"*Jodi:* {', '.join(pred_jodi)} vs `{jodi_act}` {emoji(jodi_match)}\n"
+            f"*Patti:* {emoji(patti_match)}"
+        )
+    else:
+        return (
+            f"\ud83d\udccd *{market}*\n"
+            f"*Open:* `{open_act}`\n"
+            f"*Close:* `{close_act}`\n"
+            f"*Jodi:* `{jodi_act}`"
+        )
 
 for _, row in today_actuals.iterrows():
     market = row["Market"]
     if (today, market) in sent_set:
-        continue  # Skip already sent
-    ao, aj, ac = str(row["Open"]), str(row["Jodi"]), str(row["Close"])
-    if not ao or not aj or not ac or len(aj) != 2:
         continue
-
-    actual_message = (
-        f"<b>{market}</b>\n"
-        f"<b>Open:</b> {ao}\n"
-        f"<b>Close:</b> {ac}\n"
-        f"<b>Jodi:</b> {aj}"
-    )
-
+    ao, aj, ac = str(row["Open"]), str(row["Jodi"]), str(row["Close"])
     pred_row = pred_df[pred_df["Market"] == market]
-    if not pred_row.empty:
-        pr = pred_row.iloc[0]
-        pred_open = [x.strip() for x in str(pr.get("Open", "")).split(",")]
-        pred_close = [x.strip() for x in str(pr.get("Close", "")).split(",")]
-        pred_jodi = [x.strip().zfill(2) for x in str(pr.get("Jodis", "")).split(",")]
-        pred_patti = [x.strip() for x in str(pr.get("Pattis", "")).split(",")]
-        actual_pattis = [x.strip() for x in str(row.get("Patti", "")).split(",") if x.strip()]
-
-        open_match = aj[0] in pred_open
-        close_match = aj[1] in pred_close
-        jodi_match = aj in pred_jodi
-        patti_match = any(p in pred_patti for p in actual_pattis)
-
-        if any([open_match, close_match, jodi_match, patti_match]):
-            msg = (
-                f"<b>{market}</b>\n"
-                f"<b>Open:</b> {', '.join(pred_open)} vs {aj[0]} {emoji_match(open_match)}\n"
-                f"<b>Close:</b> {', '.join(pred_close)} vs {aj[1]} {emoji_match(close_match)}\n"
-                f"<b>Jodi:</b> {', '.join(pred_jodi)} vs {aj} {emoji_match(jodi_match)}\n"
-                f"<b>Patti:</b> {emoji_match(patti_match)}"
-            )
-            messages.append(msg)
-            matched.append({
-                "Market": market, "Date": today,
-                "Open_Pred": ','.join(pred_open), "Open_Act": aj[0],
-                "Close_Pred": ','.join(pred_close), "Close_Act": aj[1],
-                "Jodi_Pred": ','.join(pred_jodi), "Jodi_Act": aj,
-                "Open_Match": open_match, "Close_Match": close_match,
-                "Jodi_Match": jodi_match, "Patti_Match": patti_match,
-                "Model": pr.get("Model", "N/A")
-            })
-            sent_log = pd.concat([sent_log, pd.DataFrame([{'Date': today, 'Market': market}])], ignore_index=True)
-        else:
-            unmatched_msgs.append(actual_message)
-            sent_log = pd.concat([sent_log, pd.DataFrame([{'Date': today, 'Market': market}])], ignore_index=True)
+    msg = format_card(market, ao, ac, aj, pred=pred_row.iloc[0] if not pred_row.empty else None)
+    if pred_row.empty:
+        unmatched_msgs.append(msg)
     else:
-        unmatched_msgs.append(actual_message)
-        sent_log = pd.concat([sent_log, pd.DataFrame([{'Date': today, 'Market': market}])], ignore_index=True)
+        matched_msgs.append(msg)
+    sent_log = pd.concat([sent_log, pd.DataFrame([{"Date": today, "Market": market}])], ignore_index=True)
 
-# --- Send Messages ---
-if matched:
-    pd.DataFrame(matched).to_csv(ACCURACY_LOG, mode='a', header=not os.path.exists(ACCURACY_LOG), index=False)
-    send_telegram_message("<b>🎯 Match Found</b>\n\n" + "\n\n".join(messages))
-
+# --- Send Final Messages ---
+if matched_msgs:
+    send_telegram_message("*\ud83c\udf1f Prediction Match Found*\n\n" + "\n\n".join(matched_msgs))
 if unmatched_msgs:
-    send_telegram_message("<b>📊 Today's Results</b>\n\n" + "\n\n".join(unmatched_msgs))
+    send_telegram_message("*\ud83d\udcca Today's Results*\n\n" + "\n\n".join(unmatched_msgs))
 
-# --- Save Sent Log ---
 sent_log.to_csv(SENT_MSG_FILE, index=False)
-print("📨 Telegram messages sent.")
+                        
