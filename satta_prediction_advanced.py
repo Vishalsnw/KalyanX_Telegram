@@ -32,10 +32,12 @@ def generate_pattis(open_vals, close_vals):
     for val in open_vals + close_vals:
         try:
             base = int(val)
-            pattis.update([str(base + i).zfill(3) for i in range(4)])
+            digits = list(str(base).zfill(3))
+            sorted_digits = ''.join(sorted(digits))
+            pattis.add(sorted_digits)
         except:
             continue
-    return list(pattis)[:4]
+    return sorted(pattis)[:4]
 
 def next_prediction_date():
     today = datetime.now()
@@ -118,7 +120,7 @@ def train_and_predict(df, market, prediction_date):
 def main():
     df = load_data()
     prediction_date = next_prediction_date()
-    full_msg = f"<b>Satta Prediction for {prediction_date}</b>\n"
+    full_msg = f"<b>📅 Satta Predictions — {prediction_date}</b>\n"
 
     try:
         df_existing = pd.read_csv(PRED_FILE)
@@ -136,19 +138,20 @@ def main():
         open_vals, close_vals, jodis, status = train_and_predict(df, market, prediction_date)
 
         if not open_vals or not close_vals or not jodis:
-            full_msg += f"\n<b>{market}</b>\n<i>⚠️ {status}</i>\n"
+            full_msg += f"\n🔸 <b>{market}</b>\n<i>⚠️ {status}</i>\n"
             continue
 
         open_digits = [str(patti_to_digit(val)) for val in open_vals]
         close_digits = [str(patti_to_digit(val)) for val in close_vals]
         pattis = generate_pattis(open_vals, close_vals)
 
+        # Card-like section
         full_msg += (
-            f"\n<b>{market}</b>\n"
-            f"<b>Open:</b> {', '.join(open_digits)}\n"
-            f"<b>Close:</b> {', '.join(close_digits)}\n"
-            f"<b>Pattis:</b> {', '.join(pattis)}\n"
-            f"<b>Top Jodis:</b> {', '.join(jodis)}"
+            f"\n🔸 <b>{market}</b>\n"
+            f"🔹 <b>Open:</b> <code>{', '.join(open_digits)}</code>\n"
+            f"🔹 <b>Close:</b> <code>{', '.join(close_digits)}</code>\n"
+            f"🎰 <b>Pattis:</b> <code>{', '.join(pattis)}</code>\n"
+            f"🔟 <b>Top Jodis:</b> <code>{', '.join(jodis)}</code>\n"
         )
 
         new_preds.append({
