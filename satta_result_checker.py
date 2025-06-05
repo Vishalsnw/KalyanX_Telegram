@@ -26,7 +26,11 @@ MARKETS = {
 
 def send_telegram_message(msg):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {"chat_id": CHAT_ID, "text": msg, "parse_mode": "Markdown"}
+    payload = {
+        "chat_id": CHAT_ID,
+        "text": msg,
+        "parse_mode": "Markdown"
+    }
     try:
         r = requests.post(url, data=payload)
         if not r.ok:
@@ -104,7 +108,7 @@ if new_rows:
 # --- Load Predictions ---
 if os.path.exists(PRED_FILE):
     pred_df = pd.read_csv(PRED_FILE)
-    pred_df['Date'] = pd.to_datetime(pred_df['Date'], errors='coerce').dt.strftime("%d/%m/%Y")
+    pred_df['Date'] = pd.to_datetime(pred_df['Date'], dayfirst=True, errors='coerce').dt.strftime("%d/%m/%Y")
     latest_date = pred_df['Date'].dropna().max()
     pred_df = pred_df[pred_df['Date'] == latest_date]
 else:
@@ -119,7 +123,7 @@ unmatched_msgs = []
 def emoji(b): return "✅" if b else "❌"
 
 def format_card(market, open_act, close_act, jodi_act, pred=None):
-    if pred:
+    if pred is not None:
         pred_open = [x.strip() for x in str(pred.get("Open", "")).split(",")]
         pred_close = [x.strip() for x in str(pred.get("Close", "")).split(",")]
         pred_jodi = [x.strip().zfill(2) for x in str(pred.get("Jodis", "")).split(",")]
@@ -132,7 +136,7 @@ def format_card(market, open_act, close_act, jodi_act, pred=None):
         patti_match = any(p in pred_patti for p in act_pattis)
 
         return (
-            f"\ud83d\udccd *{market}*\n"
+            f"📍 *{market}*\n"
             f"*Open:* {', '.join(pred_open)} vs `{jodi_act[0]}` {emoji(open_match)}\n"
             f"*Close:* {', '.join(pred_close)} vs `{jodi_act[1]}` {emoji(close_match)}\n"
             f"*Jodi:* {', '.join(pred_jodi)} vs `{jodi_act}` {emoji(jodi_match)}\n"
@@ -140,7 +144,7 @@ def format_card(market, open_act, close_act, jodi_act, pred=None):
         )
     else:
         return (
-            f"\ud83d\udccd *{market}*\n"
+            f"📍 *{market}*\n"
             f"*Open:* `{open_act}`\n"
             f"*Close:* `{close_act}`\n"
             f"*Jodi:* `{jodi_act}`"
@@ -152,8 +156,9 @@ for _, row in today_actuals.iterrows():
         continue
     ao, aj, ac = str(row["Open"]), str(row["Jodi"]), str(row["Close"])
     pred_row = pred_df[pred_df["Market"] == market]
-    msg = format_card(market, ao, ac, aj, pred=pred_row.iloc[0] if not pred_row.empty else None)
-    if pred_row.empty:
+    pred = pred_row.iloc[0] if not pred_row.empty else None
+    msg = format_card(market, ao, ac, aj, pred=pred)
+    if pred is None:
         unmatched_msgs.append(msg)
     else:
         matched_msgs.append(msg)
@@ -161,9 +166,8 @@ for _, row in today_actuals.iterrows():
 
 # --- Send Final Messages ---
 if matched_msgs:
-    send_telegram_message("*\ud83c\udf1f Prediction Match Found*\n\n" + "\n\n".join(matched_msgs))
+    send_telegram_message("*🌟 Prediction Match Found*\n\n" + "\n\n".join(matched_msgs))
 if unmatched_msgs:
-    send_telegram_message("*\ud83d\udcca Today's Results*\n\n" + "\n\n".join(unmatched_msgs))
+    send_telegram_message("*📊 Today's Results*\n\n" + "\n\n".join(unmatched_msgs))
 
 sent_log.to_csv(SENT_MSG_FILE, index=False)
-                        
