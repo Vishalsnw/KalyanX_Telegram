@@ -28,8 +28,7 @@ def send_telegram_message(msg):
     payload = {"chat_id": CHAT_ID, "text": msg, "parse_mode": "Markdown"}
     try:
         r = requests.post(url, data=payload)
-        if not r.ok:
-            print("Telegram send error:", r.text)
+        print("Telegram response:", r.status_code, r.text)
     except Exception as e:
         print("Telegram exception:", e)
 
@@ -68,7 +67,7 @@ def get_latest_result(url):
     except Exception as e:
         return {'status': f'error: {e}'}
 
-# --- Load Existing Data ---
+# --- Load existing results ---
 try:
     df = pd.read_csv(CSV_FILE)
     existing = set(zip(df['Date'], df['Market']))
@@ -76,6 +75,7 @@ except:
     df = pd.DataFrame(columns=['Date', 'Market', 'Open', 'Jodi', 'Close'])
     existing = set()
 
+# --- Load message log ---
 try:
     sent_log = pd.read_csv(SENT_MSG_FILE)
     sent_set = set(zip(sent_log['Date'], sent_log['Market']))
@@ -83,7 +83,7 @@ except:
     sent_log = pd.DataFrame(columns=['Date', 'Market'])
     sent_set = set()
 
-# --- Scrape and Append ---
+# --- Scrape today's results ---
 new_rows = []
 for market, url in MARKETS.items():
     result = get_latest_result(url)
@@ -103,15 +103,17 @@ if new_rows:
 # --- Load Predictions ---
 if os.path.exists(PRED_FILE):
     pred_df = pd.read_csv(PRED_FILE)
-    pred_df['Date'] = pd.to_datetime(pred_df['Date'], dayfirst=True, errors='coerce').dt.strftime("%d/%m/%Y")
-    latest_date = pred_df['Date'].dropna().max()
-    pred_df = pred_df[pred_df['Date'] == latest_date]
+    pred_df['Date'] = pd.to_datetime(pred_df['Date'], dayfirst=True, errors='coerce')
+    today_dt = pd.to_datetime(datetime.now().strftime("%d/%m/%Y"))
+    pred_df = pred_df[pred_df['Date'] == today_dt]
+    pred_df['Date'] = pred_df['Date'].dt.strftime("%d/%m/%Y")
 else:
     pred_df = pd.DataFrame()
 
-# --- Prepare Messages ---
+# --- Match with today's actuals ---
 today = datetime.now().strftime("%d/%m/%Y")
 today_actuals = df[df['Date'] == today]
+
 matched_msgs = []
 unmatched_msgs = []
 
@@ -131,7 +133,7 @@ def format_card(market, open_act, close_act, jodi_act, pred=None):
         patti_match = any(p in pred_patti for p in act_pattis)
 
         return (
-            f"\ud83d\udccd *{market}*\n"
+            f"\n📍 *{market}*\n"
             f"*Open:* {', '.join(pred_open)} vs `{jodi_act[0]}` {emoji(open_match)}\n"
             f"*Close:* {', '.join(pred_close)} vs `{jodi_act[1]}` {emoji(close_match)}\n"
             f"*Jodi:* {', '.join(pred_jodi)} vs `{jodi_act}` {emoji(jodi_match)}\n"
@@ -139,16 +141,18 @@ def format_card(market, open_act, close_act, jodi_act, pred=None):
         )
     else:
         return (
-            f"\ud83d\udccd *{market}*\n"
+            f"\n📍 *{market}*\n"
             f"*Open:* `{open_act}`\n"
             f"*Close:* `{close_act}`\n"
             f"*Jodi:* `{jodi_act}`"
         )
 
+# --- Message Creation Loop ---
 for _, row in today_actuals.iterrows():
     market = row["Market"]
     if (today, market) in sent_set:
         continue
+
     ao, aj, ac = str(row["Open"]), str(row["Jodi"]), str(row["Close"])
     pred_row = pred_df[pred_df["Market"] == market]
     pred = pred_row.iloc[0] if not pred_row.empty else None
@@ -174,10 +178,14 @@ for _, row in today_actuals.iterrows():
 
     sent_log = pd.concat([sent_log, pd.DataFrame([{"Date": today, "Market": market}])], ignore_index=True)
 
-# --- Send Final Messages ---
+# --- Send Messages ---
 if matched_msgs:
-    send_telegram_message("*\ud83c\udf1f Prediction Match Found*\n\n" + "\n\n".join(matched_msgs))
-if unmatched_msgs:
-    send_telegram_message("*📊 Today's Results*\n\n" + "\n\n".join(unmatched_msgs))
+    send_telegram_message("*🌟 Prediction Match Found*\n" + "\n".join(matched_msgs))
+elif unmatched_msgs:
+    send_telegram_message("*📊 Today's Results (No Match)*\n" + "\n".join(unmatched_msgs))
+else:
+    print("Nothing new to send.")
 
+# --- Save Sent Log ---
 sent_log.to_csv(SENT_MSG_FILE, index=False)
+print("Script finished.")
