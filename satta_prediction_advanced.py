@@ -8,7 +8,7 @@ import os
 
 # === CONFIG ===
 warnings.filterwarnings("ignore")
-TELEGRAM_TOKEN = "8050429062:AAGjX5t7poexZWjIEuMijQ1bVOJELqgdlmc"
+TELEGRAM_TOKEN = "8050429062:AAHfDWm42MvsfxVMOcOprH6vFxcisZJqOOg"  # ✅ Updated token
 CHAT_ID = "-1002573892631"
 MARKETS = ["Time Bazar", "Milan Day", "Rajdhani Day", "Kalyan", "Milan Night", "Rajdhani Night", "Main Bazar"]
 DATA_FILE = "satta_data.csv"
