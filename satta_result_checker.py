@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 import os
 
 # --- Configuration ---
-TELEGRAM_BOT_TOKEN = "8050429062:AAHfDWm42MvsfxVMOcOprH6vFxcisZJqOOg"  # ✅ Updated token
+TELEGRAM_BOT_TOKEN = "8050429062:AAFPLG9NuPnkDjVZyLUeg35Tlg4ArKisLbQ"  # ✅ Updated token
 CHAT_ID = "-1002573892631"
 
 CSV_FILE = "satta_data.csv"
