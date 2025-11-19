@@ -2,13 +2,13 @@ import pandas as pd
 import numpy as np
 import telegram
 from datetime import datetime, timedelta
-from sklearn.ensemble import RandomForestClassifier
+from collections import defaultdict, Counter
 import warnings
 import os
 
 # === CONFIG ===
 warnings.filterwarnings("ignore")
-TELEGRAM_TOKEN = "8050429062:AAFPLG9NuPnkDjVZyLUeg35Tlg4ArKisLbQ"  # ✅ Updated token
+TELEGRAM_TOKEN = "8050429062:AAFPLG9NuPnkDjVZyLUeg35Tlg4ArKisLbQ"
 CHAT_ID = "-1002573892631"
 MARKETS = ["Time Bazar", "Milan Day", "Rajdhani Day", "Kalyan", "Milan Night", "Rajdhani Night", "Main Bazar"]
 DATA_FILE = "satta_data.csv"
@@ -46,6 +46,63 @@ def next_prediction_date():
         return (tomorrow + timedelta(days=1)).strftime("%d/%m/%Y")
     return tomorrow.strftime("%d/%m/%Y")
 
+# === MARKOV CHAIN MODEL ===
+class MarkovChain:
+    def __init__(self, order=2):
+        self.order = order
+        self.transitions = defaultdict(Counter)
+        self.states = set()
+    
+    def fit(self, sequence):
+        """Train Markov chain on a sequence of states"""
+        if len(sequence) <= self.order:
+            return
+        
+        for i in range(len(sequence) - self.order):
+            state = tuple(sequence[i:i + self.order])
+            next_state = sequence[i + self.order]
+            self.transitions[state][next_state] += 1
+            self.states.add(state)
+    
+    def predict_next(self, current_state, top_k=2):
+        """Predict next states given current state"""
+        if len(current_state) != self.order:
+            current_state = current_state[-self.order:]
+        
+        current_state = tuple(current_state)
+        
+        if current_state not in self.transitions:
+            # If state not found, try to find similar states or return random
+            return self._fallback_prediction(top_k)
+        
+        next_states = self.transitions[current_state]
+        total = sum(next_states.values())
+        
+        # Get top k most likely next states
+        predictions = []
+        for state, count in next_states.most_common(top_k * 2):  # Get extra for filtering
+            probability = count / total
+            predictions.append((state, probability))
+        
+        return predictions[:top_k]
+    
+    def _fallback_prediction(self, top_k):
+        """Fallback when current state is not in training data"""
+        # Return most common states from entire dataset
+        all_states = []
+        for state_counter in self.transitions.values():
+            for state, count in state_counter.items():
+                all_states.append((state, count))
+        
+        if not all_states:
+            return [(np.random.randint(0, 10), 0.1) for _ in range(top_k)]
+        
+        counter = Counter()
+        for state, count in all_states:
+            counter[state] += count
+        
+        return [(state, count/sum(counter.values())) for state, count in counter.most_common(top_k)]
+
 # === LOAD DATA ===
 def load_data():
     df = pd.read_csv(DATA_FILE)
@@ -57,70 +114,131 @@ def load_data():
     df["Jodi"] = df["Jodi"].astype(str).str.zfill(2).str[-2:]
     return df.dropna()
 
-# === FEATURE ENGINEERING ===
-def engineer_features(df):
+# === FEATURE ENGINEERING FOR MARKOV CHAIN ===
+def prepare_markov_features(df):
     df = df.sort_values("Date").copy()
-    df["Prev_Open"] = df["Open"].shift(1)
-    df["Prev_Close"] = df["Close"].shift(1)
-    df["Weekday"] = df["Date"].dt.weekday
-    return df.dropna(subset=["Prev_Open", "Prev_Close"])
+    
+    # Convert numbers to single digits for Markov chain
+    df["Open_Digit"] = df["Open"].apply(patti_to_digit)
+    df["Close_Digit"] = df["Close"].apply(patti_to_digit)
+    df["Jodi_Digit1"] = df["Jodi"].str[0].astype(int)
+    df["Jodi_Digit2"] = df["Jodi"].str[1].astype(int)
+    
+    return df
 
-# === MODEL TRAINING ===
-def train_model(X, y):
-    if len(X) < 5:
-        return None
-    model = RandomForestClassifier(n_estimators=100)
-    model.fit(X, y)
-    return model
+# === MARKOV CHAIN TRAINING AND PREDICTION ===
+def train_markov_models(df_market):
+    """Train separate Markov chains for Open, Close, and Jodi digits"""
+    if len(df_market) < 5:
+        return None, None, None, "Insufficient data"
+    
+    df_market = prepare_markov_features(df_market)
+    
+    # Train Markov chain for Open digits
+    open_chain = MarkovChain(order=2)
+    open_sequence = df_market["Open_Digit"].tolist()
+    open_chain.fit(open_sequence)
+    
+    # Train Markov chain for Close digits
+    close_chain = MarkovChain(order=2)
+    close_sequence = df_market["Close_Digit"].tolist()
+    close_chain.fit(close_sequence)
+    
+    # Train Markov chain for Jodi digits
+    jodi_chain1 = MarkovChain(order=2)
+    jodi_chain2 = MarkovChain(order=2)
+    jodi_sequence1 = df_market["Jodi_Digit1"].tolist()
+    jodi_sequence2 = df_market["Jodi_Digit2"].tolist()
+    jodi_chain1.fit(jodi_sequence1)
+    jodi_chain2.fit(jodi_sequence2)
+    
+    return open_chain, close_chain, jodi_chain1, jodi_chain2
+
+def predict_with_markov(open_chain, close_chain, jodi_chain1, jodi_chain2, df_market):
+    """Make predictions using trained Markov chains"""
+    if not all([open_chain, close_chain, jodi_chain1, jodi_chain2]):
+        return None, None, None, "Model training failed"
+    
+    df_market = prepare_markov_features(df_market)
+    
+    # Get recent history for prediction
+    recent_data = df_market.tail(3)
+    
+    # Predict Open digits
+    open_history = recent_data["Open_Digit"].tolist()
+    open_preds = open_chain.predict_next(open_history, top_k=2)
+    open_vals = [pred[0] for pred in open_preds]
+    
+    # Predict Close digits
+    close_history = recent_data["Close_Digit"].tolist()
+    close_preds = close_chain.predict_next(close_history, top_k=2)
+    close_vals = [pred[0] for pred in close_preds]
+    
+    # Predict Jodi digits and combine
+    jodi_history1 = recent_data["Jodi_Digit1"].tolist()
+    jodi_history2 = recent_data["Jodi_Digit2"].tolist()
+    
+    jodi_preds1 = jodi_chain1.predict_next(jodi_history1, top_k=5)
+    jodi_preds2 = jodi_chain2.predict_next(jodi_history2, top_k=5)
+    
+    # Generate top jodis by combining digit predictions
+    jodi_vals = []
+    for digit1, prob1 in jodi_preds1:
+        for digit2, prob2 in jodi_preds2:
+            jodi = f"{digit1}{digit2}"
+            jodi_vals.append((jodi, prob1 * prob2))
+    
+    # Sort by probability and take top 10
+    jodi_vals.sort(key=lambda x: x[1], reverse=True)
+    top_jodis = [jodi[0] for jodi in jodi_vals[:10]]
+    
+    # Convert digit predictions back to 3-digit format (using most common patterns)
+    open_3digit = [find_common_3digit(df_market, digit, 'Open') for digit in open_vals]
+    close_3digit = [find_common_3digit(df_market, digit, 'Close') for digit in close_vals]
+    
+    return open_3digit, close_3digit, top_jodis, "Prediction successful"
+
+def find_common_3digit(df, target_digit, column):
+    """Find most common 3-digit number that reduces to target digit"""
+    if column == 'Open':
+        candidates = df[df["Open_Digit"] == target_digit]["Open"].value_counts()
+    else:  # Close
+        candidates = df[df["Close_Digit"] == target_digit]["Close"].value_counts()
+    
+    if not candidates.empty:
+        return int(candidates.index[0])
+    else:
+        # Fallback: generate a random 3-digit number with correct digit sum
+        return generate_3digit_with_digit(target_digit)
+
+def generate_3digit_with_digit(target_digit):
+    """Generate a 3-digit number that reduces to target digit"""
+    # Simple approach: use pattern like 100 + target_digit * 11
+    base = 100 + target_digit * 11
+    return base if base <= 999 else 100 + target_digit * 10
 
 # === TRAIN + PREDICT ===
 def train_and_predict(df, market, prediction_date):
     df_market = df[df["Market"] == market].copy()
     if len(df_market) < 6:
         return None, None, None, "Insufficient data"
-
-    df_market = engineer_features(df_market)
-    if df_market.empty:
-        return None, None, None, "Feature error"
-
-    last_row = df_market.iloc[-1]
-    X = df_market[["Prev_Open", "Prev_Close", "Weekday"]]
-    y_open = df_market["Open"].astype(int)
-    y_close = df_market["Close"].astype(int)
-    y_jodi = df_market["Jodi"]
-
-    model_open = train_model(X, y_open)
-    model_close = train_model(X, y_close)
-    model_jodi = train_model(X, y_jodi)
-
-    if not all([model_open, model_close, model_jodi]):
-        return None, None, None, "Model train fail"
-
-    X_pred = pd.DataFrame([{
-        "Prev_Open": last_row["Open"],
-        "Prev_Close": last_row["Close"],
-        "Weekday": datetime.strptime(prediction_date, "%d/%m/%Y").weekday()
-    }])
-
-    open_probs = model_open.predict_proba(X_pred)[0]
-    close_probs = model_close.predict_proba(X_pred)[0]
-    jodi_probs = model_jodi.predict_proba(X_pred)[0]
-
-    open_classes = model_open.classes_
-    close_classes = model_close.classes_
-    jodi_classes = model_jodi.classes_
-
-    open_vals = [open_classes[i] for i in np.argsort(open_probs)[-2:][::-1]]
-    close_vals = [close_classes[i] for i in np.argsort(close_probs)[-2:][::-1]]
-    jodi_vals = [jodi_classes[i] for i in np.argsort(jodi_probs)[-10:][::-1]]
-
-    return open_vals, close_vals, jodi_vals, "Prediction successful"
+    
+    # Train Markov chain models
+    open_chain, close_chain, jodi_chain1, jodi_chain2 = train_markov_models(df_market)
+    
+    # Make predictions
+    open_vals, close_vals, jodis, status = predict_with_markov(
+        open_chain, close_chain, jodi_chain1, jodi_chain2, df_market
+    )
+    
+    return open_vals, close_vals, jodis, status
 
 # === MAIN ===
 def main():
     df = load_data()
     prediction_date = next_prediction_date()
     full_msg = f"<b>📅 Satta Predictions — {prediction_date}</b>\n"
+    full_msg += "<i>Using Markov Chain Model</i>\n"
 
     try:
         df_existing = pd.read_csv(PRED_FILE)
